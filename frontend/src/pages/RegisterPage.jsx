@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
 import toast from 'react-hot-toast'
-import { Sun, Moon, Scale, Mail, Lock, User, UserPlus, ArrowRight, ShieldCheck, CheckCircle2 } from 'lucide-react'
+import { Sun, Moon, Scale, Mail, Lock, User, UserPlus, ArrowRight, CheckCircle2, FileCheck } from 'lucide-react'
+import GoogleSignInButton from '../components/GoogleSignInButton'
 
 export default function RegisterPage() {
   const { register } = useAuth()
@@ -27,76 +28,63 @@ export default function RegisterPage() {
     }
   }
 
-  const inputClass = "w-full bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-primary/10 dark:focus:ring-secondary/5 focus:border-primary dark:focus:border-secondary transition-all"
-  const labelClass = "text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400 dark:text-secondary/60 ml-1 mb-1 block"
-
   return (
-    <div className="min-h-screen flex items-center justify-center relative overflow-hidden transition-colors duration-500 bg-[#f8fafc] dark:bg-[#050810]">
-      {/* Background blobs */}
-      <div className="absolute top-[-10%] -right-[10%] w-[40%] h-[40%] bg-primary/10 rounded-full blur-[120px]" />
-      
-      <div className="container max-w-6xl mx-auto px-4 z-10 py-12">
-        <div className="flex flex-col lg:flex-row items-stretch bg-white dark:bg-navy-light/50 border border-slate-200 dark:border-white/5 rounded-[2.5rem] shadow-2xl overflow-hidden backdrop-blur-xl">
-          
-          {/* Left Side: Form */}
-          <div className="w-full lg:w-1/2 p-8 lg:p-16 relative flex flex-col justify-center order-2 lg:order-1">
-            {/* Theme Toggle */}
-            <button 
-              onClick={toggleTheme}
-              className="absolute top-8 right-8 p-3 rounded-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-600 dark:text-secondary hover:scale-110 transition-all"
-            >
+    <div className="auth-page">
+      <div className="auth-bg-blob auth-bg-blob--a" />
+
+      <div className="auth-container auth-container--register">
+        <div className="auth-card">
+
+          <div className="auth-panel-form" style={{ order: 2 }}>
+            <button onClick={toggleTheme} className="theme-toggle-floating" style={{ top: '2rem', right: '2rem' }} aria-label="Toggle theme">
               {isDark ? <Sun size={20} /> : <Moon size={20} />}
             </button>
 
-            <div className="max-w-md mx-auto w-full">
-              <div className="mb-10">
-                <h2 className="text-4xl font-bold text-slate-900 dark:text-white mb-3">Join the Archives</h2>
-                <p className="text-slate-500 dark:text-cream-dim/60 text-lg font-medium">Create your legal professional account.</p>
+            <div className="auth-form-wrap">
+              <div style={{ marginBottom: '2.5rem' }}>
+                <h2 className="auth-form-title" style={{ fontSize: '2.25rem' }}>Join the Archives</h2>
+                <p className="auth-form-subtitle">Create your legal professional account.</p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 gap-4">
+              <form onSubmit={handleSubmit} className="auth-form auth-form--compact">
+                <div className="auth-form-grid">
                   <div>
-                    <label className={labelClass}>Full Name</label>
-                    <div className="relative">
-                      <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input type="text" value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})} className={inputClass} placeholder="Counsel Name" />
+                    <label className="auth-label">Full Name</label>
+                    <div className="auth-input-wrap">
+                      <User className="auth-input-icon" size={18} />
+                      <input type="text" value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})} className="auth-input auth-input--compact" placeholder="Counsel Name" />
                     </div>
                   </div>
 
                   <div>
-                    <label className={labelClass}>Email Address</label>
-                    <div className="relative">
-                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className={inputClass} placeholder="advocate@court.in" required />
+                    <label className="auth-label">Email Address</label>
+                    <div className="auth-input-wrap">
+                      <Mail className="auth-input-icon" size={18} />
+                      <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="auth-input auth-input--compact" placeholder="advocate@court.in" required />
                     </div>
                   </div>
 
                   <div>
-                    <label className={labelClass}>Unique Username</label>
-                    <div className="relative">
-                      <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input type="text" value={form.username} onChange={e => setForm({...form, username: e.target.value})} className={inputClass} placeholder="counsel_24" required />
+                    <label className="auth-label">Unique Username</label>
+                    <div className="auth-input-wrap">
+                      <UserPlus className="auth-input-icon" size={18} />
+                      <input type="text" value={form.username} onChange={e => setForm({...form, username: e.target.value})} className="auth-input auth-input--compact" placeholder="counsel_24" required />
                     </div>
                   </div>
 
                   <div>
-                    <label className={labelClass}>Access Password</label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} className={inputClass} placeholder="••••••••" required />
+                    <label className="auth-label">Access Password</label>
+                    <div className="auth-input-wrap">
+                      <Lock className="auth-input-icon" size={18} />
+                      <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} className="auth-input auth-input--compact" placeholder="••••••••" required />
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-4">
-                  <button 
-                    type="submit" 
-                    disabled={loading}
-                    className="w-full bg-primary dark:bg-secondary text-white dark:text-navy py-5 rounded-2xl font-bold text-lg shadow-2xl shadow-primary/20 dark:shadow-secondary/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                  >
+                <div style={{ paddingTop: '1rem' }}>
+                  <button type="submit" disabled={loading} className="auth-submit">
                     {loading ? (
-                      <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      <div className="spinner" />
                     ) : (
                       <>Create Account <ArrowRight size={22} /></>
                     )}
@@ -104,10 +92,19 @@ export default function RegisterPage() {
                 </div>
               </form>
 
-              <div className="mt-10 text-center">
-                <p className="text-slate-500 dark:text-white/30 font-medium">
-                  Already have access? {' '}
-                  <Link to="/login" className="text-primary dark:text-secondary font-bold hover:underline italic decoration-2 underline-offset-4">
+              <div className="auth-divider"><span>or</span></div>
+              <GoogleSignInButton />
+
+              <div className="auth-security-badges">
+                <span className="auth-security-badge"><Lock size={13} /> AES-256</span>
+                <span className="auth-security-badge-sep" />
+                <span className="auth-security-badge"><FileCheck size={13} /> Compliance Ready</span>
+              </div>
+
+              <div className="auth-footer">
+                <p>
+                  Already have access?{' '}
+                  <Link to="/login">
                     Sign in here
                   </Link>
                 </p>
@@ -115,31 +112,38 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* Right Side: Features/Branding */}
-          <div className="lg:w-1/2 p-12 lg:p-20 bg-primary relative flex flex-col justify-center overflow-hidden text-white order-1 lg:order-2">
-            <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'linear-gradient(45deg, white 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
-            
-            <div className="relative z-10">
-              <div className="w-16 h-16 bg-secondary rounded-2xl flex items-center justify-center shadow-lg mb-12">
-                <Scale size={32} className="text-primary" />
+          <div className="auth-panel-brand auth-panel-brand--center" style={{ order: 1 }}>
+            <div className="auth-panel-pattern auth-panel-pattern--lines" />
+
+            <div style={{ position: 'relative', zIndex: 10 }}>
+              <div className="auth-brand-row">
+                <div className="auth-brand-badge" style={{ width: '4rem', height: '4rem', borderRadius: '1rem' }}>
+                  <Scale size={32} />
+                </div>
+                <span className="auth-brand-name">Lex<span className="brand-accent">Draft</span> AI</span>
               </div>
-              <h1 className="font-serif text-5xl font-bold mb-8 leading-tight">
-                Unlock the <span className="text-secondary italic">Standard</span> in Legal Automation.
+
+              <h1 className="auth-headline" style={{ fontSize: '3rem', marginBottom: '2rem' }}>
+                Unlock the <span className="auth-headline-accent">Standard</span> in Legal Automation.
               </h1>
-              
-              <div className="space-y-6">
+
+              <div className="auth-feature-list">
                 {[
                   "Draft high-quality complaints in seconds",
                   "Automated Indian Statute referencing",
                   "Secure, private case management",
                   "Verified RAG-enhanced accuracy"
                 ].map((text, i) => (
-                  <div key={i} className="flex items-center gap-4 bg-white/5 border border-white/10 p-4 rounded-2xl backdrop-blur-md">
-                    <CheckCircle2 size={24} className="text-secondary shrink-0" />
-                    <span className="text-lg font-medium text-white/90">{text}</span>
+                  <div key={i} className="auth-feature-card">
+                    <CheckCircle2 size={24} className="auth-headline-accent" />
+                    <span className="auth-feature-card-text">{text}</span>
                   </div>
                 ))}
               </div>
+            </div>
+
+            <div className="auth-brand-footer" style={{ marginTop: '2rem' }}>
+              © 2024 LexDraft Enterprise Legal Systems
             </div>
           </div>
 
