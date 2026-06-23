@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 from app.db.postgres import Base, get_db
 from app.core.security import get_current_user
 from app.models.user import User
+from app.models import case  # noqa: F401 - must be imported so Base.metadata knows about Case/Draft
 import uuid
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -55,6 +56,19 @@ def mock_user():
 @pytest.fixture
 async def client(db_session, mock_user):
     from main import app
+    from app.db import redis_client
+
+    # Mock Redis (no real Redis server in the test environment)
+    mock_redis = MagicMock()
+    mock_redis.ping = AsyncMock(return_value=True)
+    mock_redis.hset = AsyncMock(return_value=None)
+    mock_redis.expire = AsyncMock(return_value=None)
+    mock_redis.hgetall = AsyncMock(return_value={})
+    mock_redis.set = AsyncMock(return_value=None)
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.delete = AsyncMock(return_value=None)
+    mock_redis.publish = AsyncMock(return_value=None)
+    redis_client._redis = mock_redis
 
     # Mock NLP pipeline
     mock_pipeline = MagicMock()

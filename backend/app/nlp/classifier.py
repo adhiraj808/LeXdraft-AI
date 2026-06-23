@@ -4,6 +4,7 @@ Classifies legal cases into: Criminal, Civil, Family, Labour, Constitutional, Pr
 """
 
 import logging
+import os
 from typing import Dict, List, Tuple
 try:
     import torch
@@ -65,28 +66,34 @@ class CaseClassifier:
         self.use_model = False
 
     async def load(self):
-        """Load the classifier model. Falls back to keyword mode if loading fails."""
+        """
+        Load a fine-tuned classifier checkpoint if one exists on disk.
+        The base HF_MODEL_CLASSIFIER has no trained classification head, so its
+        logits are meaningless noise — it is never used directly. Without a real
+        checkpoint (produced by app/nlp/training/train_classifier.py), the keyword
+        classifier remains the active method.
+        """
+        checkpoint_dir = settings.CLASSIFIER_MODEL_PATH
+        if not os.path.isdir(checkpoint_dir) or not os.path.exists(os.path.join(checkpoint_dir, "config.json")):
+            logger.info(f"No fine-tuned classifier checkpoint at {checkpoint_dir}. Using keyword classifier.")
+            self.use_model = False
+            return
+
         try:
-            logger.info(f"Loading classifier model: {settings.HF_MODEL_CLASSIFIER}")
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                settings.HF_MODEL_CLASSIFIER,
-                cache_dir=settings.MODEL_CACHE_DIR,
-            )
-            # In production: load fine-tuned model with num_labels=6
-            # Here we load base model and simulate classification
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                settings.HF_MODEL_CLASSIFIER,
-                num_labels=len(CASE_LABELS),
-                ignore_mismatched_sizes=True,
-                cache_dir=settings.MODEL_CACHE_DIR,
-            )
+            logger.info(f"Loading fine-tuned classifier checkpoint: {checkpoint_dir}")
+            self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
+            self.model = AutoModelForSequenceClassification.from_pretrained(checkpoint_dir)
+            if self.model.config.num_labels != len(CASE_LABELS):
+                raise ValueError(
+                    f"Checkpoint has {self.model.config.num_labels} labels, expected {len(CASE_LABELS)}"
+                )
             self.model.eval()
             if settings.USE_GPU and torch.cuda.is_available():
                 self.model = self.model.cuda()
             self.use_model = True
-            logger.info("Classifier model loaded.")
+            logger.info("Fine-tuned classifier model loaded.")
         except Exception as e:
-            logger.warning(f"Could not load classifier model ({e}). Using keyword fallback.")
+            logger.warning(f"Could not load classifier checkpoint ({e}). Using keyword fallback.")
             self.use_model = False
 
     def _keyword_classify(self, text: str) -> Tuple[str, float]:

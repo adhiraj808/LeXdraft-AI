@@ -11,7 +11,9 @@ from app.nlp.classifier import CaseClassifier
 
 @pytest.fixture
 def nlp():
-    return spacy.blank("en")
+    nlp = spacy.blank("en")
+    nlp.add_pipe("sentencizer")
+    return nlp
 
 
 @pytest.fixture

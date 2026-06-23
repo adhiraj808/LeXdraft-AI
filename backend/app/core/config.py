@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
+    # Google Sign-In — the OAuth Client ID created in Google Cloud Console.
+    # The backend verifies incoming credentials' `aud` claim against this value.
+    GOOGLE_CLIENT_ID: str = ""
+
     # PostgreSQL
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
@@ -52,6 +56,11 @@ class Settings(BaseSettings):
 
     # NLP / ML Models
     HF_MODEL_CLASSIFIER: str = "distilbert-base-uncased"
+    # Path to a locally fine-tuned classifier checkpoint (output of
+    # app/nlp/training/train_classifier.py). Only used if it actually exists —
+    # the base HF_MODEL_CLASSIFIER has no trained classification head and must
+    # never be used directly for predictions (see CaseClassifier.load()).
+    CLASSIFIER_MODEL_PATH: str = ".cache/models/classifier_model"
     HF_MODEL_GENERATOR: str = "google/flan-t5-base"
     GGUF_MODEL_PATH: str = ".cache/models/llama-3.2-1b-instruct.Q4_K_M.gguf"
     SPACY_MODEL: str = "en_core_web_sm"

@@ -54,12 +54,13 @@ class LegalNERExtractor:
             found.extend([m.strip() for m in matches if m.strip()])
         return list(set(found))
 
-    def extract(self, text: str) -> Dict[str, List[str]]:
+    def extract(self, text: str, doc=None) -> Dict[str, List[str]]:
         """
         Run full NER extraction on legal text.
         Returns entities grouped by type.
+        `doc` may be a spaCy Doc already parsed from `text`, to avoid re-parsing.
         """
-        doc = self.nlp(text)
+        doc = doc if doc is not None else self.nlp(text)
 
         # spaCy entity buckets
         persons = []

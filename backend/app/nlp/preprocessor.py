@@ -42,9 +42,9 @@ class LegalTextPreprocessor:
         text = re.sub(r'-{2,}', ' - ', text)
         return text.strip()
 
-    def segment_sentences(self, text: str) -> List[str]:
-        """Split text into sentences using spaCy."""
-        doc = self.nlp(text)
+    def segment_sentences(self, text: str, doc=None) -> List[str]:
+        """Split text into sentences using spaCy. Reuses `doc` if already parsed."""
+        doc = doc if doc is not None else self.nlp(text)
         return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
     def tokenize(self, text: str) -> List[str]:
@@ -73,13 +73,14 @@ class LegalTextPreprocessor:
             found.extend([m.strip() for m in matches])
         return list(set(found))
 
-    def preprocess(self, text: str) -> Dict:
+    def preprocess(self, text: str, doc=None) -> Dict:
         """
         Full preprocessing pipeline.
         Returns a structured dict with cleaned text, sentences, tokens, and extracted sections.
+        `doc` may be a spaCy Doc already parsed from `clean_text(text)`, to avoid re-parsing.
         """
         cleaned = self.clean_text(text)
-        sentences = self.segment_sentences(cleaned)
+        sentences = self.segment_sentences(cleaned, doc=doc)
         tokens = self.tokenize(cleaned)
         legal_sections = self.extract_legal_sections(text)
 

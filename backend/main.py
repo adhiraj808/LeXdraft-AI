@@ -30,6 +30,12 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("Starting Legal Draft AI System...")
 
+    if not settings.DEBUG and settings.SECRET_KEY == "dev-secret-key-change-in-production":
+        raise RuntimeError(
+            "SECRET_KEY is still set to the development default. "
+            "Set a real random SECRET_KEY in .env before running with DEBUG=false."
+        )
+
     # Initialize database
     await init_db()
     logger.info("PostgreSQL connected.")
