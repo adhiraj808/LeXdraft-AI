@@ -4,10 +4,14 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
     build-essential \
+    cmake \
     libpq-dev \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# CPU-only torch (default PyPI torch drags ~4GB CUDA libs; CPU is enough here)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN python -m spacy download en_core_web_sm

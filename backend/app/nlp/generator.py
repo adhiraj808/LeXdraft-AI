@@ -1,8 +1,11 @@
 import logging, time, datetime, os
-from typing import Dict
+from typing import Dict, Optional
+import httpx
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 try:
     from llama_cpp import Llama
@@ -57,8 +60,12 @@ class LegalDraftGenerator:
     def __init__(self):
         self.use_model = False
         self.llm = None
+        # Online Groq LLM is preferred when a key is configured (never logged).
+        self.use_groq = bool(settings.GROQ_API_KEY)
 
     async def load(self):
+        if self.use_groq:
+            logger.info(f"Groq online LLM enabled (model={settings.GROQ_MODEL}).")
         if not LLAMA_AVAILABLE:
             logger.error("Cannot load GGUF model: llama-cpp-python not available.")
             return
@@ -124,6 +131,76 @@ Draft the {section.replace('_', ' ')} section only.
         except Exception as e:
             logger.error(f"LLM generation failed: {str(e)}")
             return None
+
+    def _section_prompt(self, section: str, ctx: Dict) -> str:
+        """Shared prompt builder for online LLM drafting."""
+        case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
+        p = ctx.get("petitioner", "The Petitioner")
+        r = ctx.get("respondent", "The Respondent")
+        court = ctx.get("court", "HON'BLE COURT")
+        loc = ctx.get("location", "Delhi")
+        desc = ctx.get("description", "")
+        relief = ctx.get("relief_sought", "")
+        sl = ctx.get("statutes", [])
+        stat = ", ".join(sl) if sl else "applicable provisions of law"
+        rag = ctx.get("rag_context", "")
+        return (
+            f"You are an expert Indian legal draftsman. Draft ONLY the "
+            f"'{section.replace('_', ' ')}' section of a legal pleading for a "
+            f"{case_type} case in India, using proper format and terminology.\n"
+            f"Case Type: {case_type}\nPetitioner: {p}\nRespondent: {r}\n"
+            f"Court: {court}\nLocation: {loc}\nFacts: {desc}\n"
+            f"Relief Sought: {relief}\nStatutes: {stat}\n"
+            f"Relevant precedents:\n{rag}\n"
+            f"Output the section text only, no explanations."
+        )
+
+    def _generate_with_groq(self, section: str, ctx: Dict) -> Optional[str]:
+        """Draft one section via the Groq cloud API. Returns None on any failure
+        (the caller then falls back to local LLM / templates). The API key is
+        sent only in the Authorization header and never logged."""
+        if not self.use_groq:
+            return None
+        payload = {
+            "model": settings.GROQ_MODEL,
+            "messages": [
+                {"role": "system",
+                 "content": "You are an expert Indian legal draftsman."},
+                {"role": "user",
+                 "content": self._section_prompt(section, ctx)},
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        }
+        # Retry on rate-limit (429) / transient 5xx, honouring Retry-After.
+        delays = [3, 8, 20]
+        for attempt in range(4):
+            try:
+                with httpx.Client(timeout=90.0) as client:
+                    resp = client.post(
+                        GROQ_API_URL,
+                        headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+                        json=payload,
+                    )
+                if resp.status_code == 200:
+                    text = resp.json()["choices"][0]["message"]["content"].strip()
+                    return text or None
+                if resp.status_code in (429, 500, 502, 503) and attempt < 3:
+                    wait = resp.headers.get("retry-after")
+                    wait_s = float(wait) if wait and str(wait).replace(".", "", 1).isdigit() else delays[attempt]
+                    logger.info(f"Groq API status {resp.status_code}, retrying in {wait_s}s...")
+                    time.sleep(wait_s)
+                    continue
+                # Log status only — never the body/key.
+                logger.warning(f"Groq API returned status {resp.status_code}, falling back.")
+                return None
+            except Exception:
+                if attempt < 3:
+                    time.sleep(delays[attempt])
+                    continue
+                logger.warning("Groq API call failed repeatedly, falling back.")
+                return None
+        return None
 
     def _parties_block(self, cfg, p, r):
         """Shared 'IN THE MATTER OF ... Versus ...' block used by most sections."""
@@ -345,6 +422,12 @@ Draft the {section.replace('_', ' ')} section only.
                 f"4.\tThat the Plaintiff is entitled to recover the said damages under {stat}. I hereby close my evidence. My statements are true and correct.")
 
     def _t(self, section, ctx):
+        # Priority: Groq cloud API -> local GGUF -> hardcoded templates.
+        if self.use_groq:
+            groq_text = self._generate_with_groq(section, ctx)
+            if groq_text:
+                return groq_text
+
         if self.use_model and self.llm:
             llm_text = self._generate_with_llm(section, ctx)
             if llm_text:
@@ -427,7 +510,12 @@ Draft the {section.replace('_', ' ')} section only.
     def generate_all_sections(self, context):
         start = time.time()
         order = ["title_block","complaint_body","prayer","list_of_witnesses","list_of_documents","affidavit","evidence_affidavit"]
-        sections = {s: self._t(s, context) for s in order}
+        sections = {}
+        for i, s in enumerate(order):
+            sections[s] = self._t(s, context)
+            # Stagger cloud calls so the free-tier per-minute limit isn't hit.
+            if self.use_groq and i < len(order) - 1:
+                time.sleep(4)
         sections["_generation_time"] = round(time.time()-start, 2)
         sections["_full_text"] = ("\n\n"+"="*70+"\n\n").join(sections[k] for k in order)
         logger.info(f"All 7 sections generated in {sections['_generation_time']}s")

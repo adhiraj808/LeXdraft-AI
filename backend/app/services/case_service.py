@@ -18,6 +18,16 @@ from app.db.redis_client import (
 logger = logging.getLogger(__name__)
 
 
+def _model_name(nlp_pipeline) -> str:
+    """Human-readable label for which generator produced a draft."""
+    gen = getattr(nlp_pipeline, "generator", None)
+    if getattr(gen, "use_groq", False):
+        return "groq"
+    if getattr(gen, "use_model", False):
+        return "local-llm"
+    return "template"
+
+
 class CaseService:
 
     def __init__(self, db: AsyncSession):
@@ -119,7 +129,7 @@ class CaseService:
                     sections=draft_sections,
                     full_text=full_text,
                     version=1,
-                    model_used="flan-t5" if nlp_pipeline.generator.use_model else "template",
+                    model_used=_model_name(nlp_pipeline),
                     generation_time_seconds=gen_time,
                 )
                 self.db.add(draft)

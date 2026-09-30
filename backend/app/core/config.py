@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # The backend verifies incoming credentials' `aud` claim against this value.
     GOOGLE_CLIENT_ID: str = ""
 
+    # Groq online LLM (optional). When set, drafts are generated via the Groq
+    # cloud API instead of the local GGUF model. Falls back to local/template
+    # if the key is missing or the API call fails. NEVER commit this key.
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+
     # PostgreSQL
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432

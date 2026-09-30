@@ -4,6 +4,7 @@ import Layout from '../components/Layout'
 import { casesAPI } from '../services/api'
 import toast from 'react-hot-toast'
 import { ChevronRight, ChevronLeft, Save, Scale, User, CreditCard, FileText, CheckCircle2 } from 'lucide-react'
+import { COURTS, LOCATIONS, POLICE_STATIONS } from '../data/legalLists'
 
 function StepIndicator({ currentStep }) {
   const steps = [
@@ -138,14 +139,23 @@ export default function NewCasePage() {
                   <p>Specify where the case will be filed</p>
                 </div>
                 <div className="form-grid-2">
-                  <Field label="Name of the Court" hint="e.g. District Court" required>
-                    <input className="text-input" value={form.court_name} onChange={set('court_name')} placeholder="Enter court name..." />
+                  <Field label="Name of the Court" hint="pick from list or type" required>
+                    <input className="text-input" value={form.court_name} onChange={set('court_name')} placeholder="Select court..." list="court-list" autoComplete="off" />
+                    <datalist id="court-list">
+                      {COURTS.map(c => <option key={c} value={c} />)}
+                    </datalist>
                   </Field>
-                  <Field label="Location/Place" hint="e.g. Saket, Delhi" required>
-                    <input className="text-input" value={form.court_location} onChange={set('court_location')} placeholder="Enter location..." />
+                  <Field label="Location/Place" hint="pick from list or type" required>
+                    <input className="text-input" value={form.court_location} onChange={set('court_location')} placeholder="Select location..." list="location-list" autoComplete="off" />
+                    <datalist id="location-list">
+                      {LOCATIONS.map(l => <option key={l} value={l} />)}
+                    </datalist>
                   </Field>
-                  <Field label="Police Station">
-                    <input className="text-input" value={form.police_station} onChange={set('police_station')} placeholder="PS name..." />
+                  <Field label="Police Station" hint="pick from list or type">
+                    <input className="text-input" value={form.police_station} onChange={set('police_station')} placeholder="Select police station..." list="police-station-list" autoComplete="off" />
+                    <datalist id="police-station-list">
+                      {POLICE_STATIONS.map(p => <option key={p} value={p} />)}
+                    </datalist>
                   </Field>
                   <Field label="Statutes/Sections" hint="Comma separated">
                     <input className="text-input" value={form.sections_alleged} onChange={set('sections_alleged')} placeholder="e.g. Section 138 NI Act" />
