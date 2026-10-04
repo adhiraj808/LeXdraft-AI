@@ -1,5 +1,6 @@
 """Business logic layer for case processing."""
 
+import asyncio
 import logging
 import uuid
 from typing import List, Optional
@@ -67,6 +68,31 @@ class CaseService:
         await self.db.commit()
         await self.db.refresh(case)
         return case
+
+    async def create_case_from_prompt(self, prompt: str, user: User) -> Case:
+        """Create a case from a free-form prompt using Groq extraction."""
+        from app.nlp.extractor import extract_case_fields
+        fields = await asyncio.to_thread(extract_case_fields, prompt)
+        if fields:
+            title = fields.get("title") or (prompt[:60] + "...")
+            if len(title) < 5:
+                title = (prompt[:60] + "...")
+            payload = CaseSubmit(
+                title=title,
+                jurisdiction=fields.get("jurisdiction") or None,
+                petitioner_name=fields.get("petitioner_name") or None,
+                respondent_name=fields.get("respondent_name") or None,
+                incident_date=fields.get("incident_date") or None,
+                case_description=fields.get("case_description") or prompt,
+                sections_alleged=fields.get("sections_alleged") or None,
+                relief_sought=fields.get("relief_sought") or None,
+            )
+        else:
+            payload = CaseSubmit(
+                title=prompt[:57] + "...",
+                case_description=prompt,
+            )
+        return await self.create_case(payload, user)
 
     async def process_case(self, case_id: str, nlp_pipeline) -> Case:
         """Run the NLP pipeline on a case and persist results."""
@@ -175,7 +201,9 @@ class CaseService:
 
     async def delete_case(self, case_id: str, user: User) -> bool:
         result = await self.db.execute(
-            select(Case).where(Case.id == case_id, Case.user_id == user.id)
+            select(Case)
+            .options(selectinload(Case.draft))
+            .where(Case.id == case_id, Case.user_id == user.id)
         )
         case = result.scalar_one_or_none()
         if not case:
@@ -190,6 +218,18 @@ class CaseService:
         case = await self.get_case(case_id, user)
         if not case:
             raise ValueError("Case not found")
+
+        if section == "all":
+            await self.process_case(case_id, nlp_pipeline)
+            regenerated = await self.get_case(case_id, user)
+            if not regenerated or not regenerated.draft:
+                raise RuntimeError("Draft regeneration did not produce a draft")
+            return {
+                "section": "all",
+                "sections": regenerated.draft.sections,
+                "full_text": regenerated.draft.full_text,
+                "version": regenerated.draft.version,
+            }
 
         case_input = {
             "case_description": case.case_description,

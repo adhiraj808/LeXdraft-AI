@@ -6,6 +6,7 @@ import { Sun, Moon } from 'lucide-react'
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/cases/new',  label: 'New Draft'  },
+  { to: '/cases/newchat', label: 'New Chat' },
   { to: '/cases',      label: 'My Cases'   },
 ]
 

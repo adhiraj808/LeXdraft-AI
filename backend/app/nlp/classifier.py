@@ -37,7 +37,9 @@ CASE_LABELS = {
 KEYWORD_MAP = {
     "Criminal": ["murder", "assault", "theft", "robbery", "fraud", "cheating", "rape",
                  "kidnapping", "ipc", "crpc", "fir", "bail", "arrest", "accused",
-                 "offence", "crime", "police", "jail", "prison", "custody"],
+                 "offence", "crime", "police", "jail", "prison", "custody",
+                 "cheque", "dishonour", "dishonored", "bounce", "bounced",
+                 "ni act", "negotiable", "138"],
     "Civil": ["contract", "breach", "damages", "injunction", "tort", "negligence",
               "specific performance", "declaration", "civil suit", "plaintiff", "defendant"],
     "Family Law": ["divorce", "matrimonial", "custody", "maintenance", "alimony",
@@ -116,7 +118,10 @@ class CaseClassifier:
         """
         Classify the legal case text.
         Returns label, confidence, and probability distribution over all classes.
+        Hybrid: transformer and keyword runs are compared and the more
+        confident one wins (protects against a weak model on odd texts).
         """
+        kw_label, kw_conf = self._keyword_classify(text)
         if self.use_model and self.tokenizer and self.model:
             try:
                 inputs = self.tokenizer(
@@ -141,20 +146,24 @@ class CaseClassifier:
                     CASE_LABELS[i]: round(probs[i].item(), 4)
                     for i in range(len(CASE_LABELS))
                 }
-                return {
-                    "case_type": label,
-                    "confidence": confidence,
-                    "probabilities": all_probs,
-                    "method": "transformer",
-                }
+                if confidence >= kw_conf:
+                    return {
+                        "case_type": label,
+                        "confidence": confidence,
+                        "probabilities": all_probs,
+                        "method": "transformer",
+                    }
+                logger.info(
+                    f"Keyword ({kw_label} {kw_conf}) beat transformer "
+                    f"({label} {confidence}); using keyword."
+                )
             except Exception as e:
                 logger.warning(f"Model inference failed: {e}. Falling back to keywords.")
 
         # Keyword fallback
-        label, confidence = self._keyword_classify(text)
         return {
-            "case_type": label,
-            "confidence": confidence,
+            "case_type": kw_label,
+            "confidence": kw_conf,
             "probabilities": {k: 0.0 for k in CASE_LABELS.values()},
             "method": "keyword",
         }

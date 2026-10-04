@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import Layout from '../components/Layout'
 import { casesAPI } from '../services/api'
 import toast from 'react-hot-toast'
@@ -125,6 +125,12 @@ export default function NewCasePage() {
         <header className="page-header-center">
           <h1>Initialize New Draft</h1>
           <p>Fill in the details below to generate an AI-powered legal draft.</p>
+          <p>
+            Prefer talking it through?{' '}
+            <Link to="/cases/newchat" className="empty-link">
+              Try chat mode
+            </Link>
+          </p>
         </header>
 
         <StepIndicator currentStep={step} />

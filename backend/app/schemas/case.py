@@ -85,5 +85,15 @@ class CaseListItem(BaseModel):
 
 
 class RegenerateRequest(BaseModel):
-    section: str = Field(..., description="Section to regenerate: facts|grounds|prayer|verification|all")
+    section: str = Field(
+        ...,
+        description=(
+            "Section to regenerate: title_block|complaint_body|prayer|"
+            "list_of_witnesses|list_of_documents|affidavit|evidence_affidavit|all"
+        ),
+    )
     additional_context: Optional[str] = None
+
+
+class PromptSubmit(BaseModel):
+    prompt: str = Field(..., min_length=30, max_length=6000, description="Free-form case narrative")

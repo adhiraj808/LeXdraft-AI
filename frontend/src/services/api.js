@@ -34,6 +34,7 @@ export const authAPI = {
 
 export const casesAPI = {
   submit: (data) => api.post('/cases/submit', data),
+  prompt: (data) => api.post('/cases/prompt', data),
   list: (skip = 0, limit = 20) => api.get(`/cases/?skip=${skip}&limit=${limit}`),
   get: (id) => api.get(`/cases/${id}`),
   delete: (id) => api.delete(`/cases/${id}`),

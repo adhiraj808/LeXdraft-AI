@@ -1,6 +1,6 @@
 """API routes for managing the RAG knowledge base."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 from app.core.security import get_current_user
@@ -23,6 +23,11 @@ async def add_document(
     current_user: User = Depends(get_current_user),
 ):
     """Add a legal judgement or document to the RAG knowledge base."""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can add documents to the knowledge base",
+        )
     nlp = request.app.state.nlp_pipeline
     doc_id = f"user_{current_user.id[:8]}_{str(uuid.uuid4())[:8]}"
     nlp.add_legal_document(

@@ -36,14 +36,24 @@ class Case(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user: Mapped["User"] = relationship("User", back_populates="cases")  # noqa
-    draft: Mapped["Draft"] = relationship("Draft", back_populates="case", uselist=False)
+    draft: Mapped["Draft"] = relationship(
+        "Draft",
+        back_populates="case",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class Draft(Base):
     __tablename__ = "drafts"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    case_id: Mapped[str] = mapped_column(String, ForeignKey("cases.id"), nullable=False, unique=True)
+    case_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("cases.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
 
     # Draft sections stored as JSON
     sections: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

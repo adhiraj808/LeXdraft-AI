@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres import get_db
-from app.schemas.case import CaseSubmit, CaseResponse, CaseListItem, RegenerateRequest
+from app.schemas.case import CaseSubmit, CaseResponse, CaseListItem, RegenerateRequest, PromptSubmit
 from app.services.case_service import CaseService
 from app.core.security import get_current_user
 from app.models.user import User
@@ -38,6 +38,27 @@ async def submit_case(
         "status": case.status,
         "created_at": case.created_at.isoformat(),
         "message": "Case submitted. AI is generating your draft."
+    }
+
+
+@router.post("/prompt", status_code=202)
+async def submit_case_prompt(
+    payload: PromptSubmit,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = CaseService(db)
+    case = await service.create_case_from_prompt(payload.prompt, current_user)
+    nlp = get_nlp(request)
+    background_tasks.add_task(_process_case_background, case.id, nlp)
+    return {
+        "id": case.id,
+        "title": case.title,
+        "status": case.status,
+        "created_at": case.created_at.isoformat(),
+        "message": "Prompt received. AI is extracting details and generating your draft."
     }
 
 
@@ -143,9 +164,14 @@ async def delete_case(
 @router.get("/{case_id}/progress")
 async def stream_progress(
     case_id: str,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     from app.db.redis_client import get_redis
+
+    service = CaseService(db)
+    if not await service.get_case(case_id, current_user):
+        raise HTTPException(status_code=404, detail="Case not found")
 
     async def event_generator():
         r = get_redis()
