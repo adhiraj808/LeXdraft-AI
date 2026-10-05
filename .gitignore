@@ -49,3 +49,5 @@ redis_data/
 # Local helper files (may contain real secrets/creds — NEVER commit)
 run-all.ps1
 run-it.md
+export-data.ps1
+data-export/
