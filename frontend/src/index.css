@@ -569,16 +569,25 @@ html.dark .nav-link.active {
 }
 
 .theme-toggle {
-  border: none;
-  background: transparent;
-  padding: 0.5rem;
-  border-radius: 0.5rem;
+  border: 1px solid var(--border-color);
+  background: var(--surface-soft);
+  width: 2.4rem;
+  height: 2.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
   color: var(--text-dim);
-  transition: background-color 0.15s ease;
+  transition: all 0.15s ease;
 }
 
 html.dark .theme-toggle {
   color: var(--gold);
+}
+
+.theme-toggle svg,
+.theme-toggle-floating svg {
+  display: block;
 }
 
 .theme-toggle:hover {
