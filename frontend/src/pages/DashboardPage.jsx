@@ -90,11 +90,10 @@ export default function DashboardPage() {
             {cases.slice(0, 5).map((c) => (
               <Link key={c.id} to={`/cases/${c.id}`}>
                 <div className="activity-row">
-                  <div className={`activity-dot ${
-                    c.status === 'completed' ? 'activity-dot--completed' :
+                  <div className={`activity-dot ${c.status === 'completed' ? 'activity-dot--completed' :
                     c.status === 'failed' ? 'activity-dot--failed' :
-                    'activity-dot--active'
-                  }`} />
+                      'activity-dot--active'
+                    }`} />
                   <div className="activity-info">
                     <h3 className="activity-title truncate">{c.title}</h3>
                     <time className="activity-date">

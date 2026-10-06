@@ -52,7 +52,7 @@ export default function RegisterPage() {
                     <label className="auth-label">Full Name</label>
                     <div className="auth-input-wrap">
                       <User className="auth-input-icon" size={18} />
-                      <input type="text" value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})} className="auth-input auth-input--compact" placeholder="Counsel Name" />
+                      <input type="text" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} className="auth-input auth-input--compact" placeholder="Counsel Name" />
                     </div>
                   </div>
 
@@ -60,7 +60,7 @@ export default function RegisterPage() {
                     <label className="auth-label">Email Address</label>
                     <div className="auth-input-wrap">
                       <Mail className="auth-input-icon" size={18} />
-                      <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="auth-input auth-input--compact" placeholder="advocate@court.in" required />
+                      <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="auth-input auth-input--compact" placeholder="advocate@court.in" required />
                     </div>
                   </div>
 
@@ -68,7 +68,7 @@ export default function RegisterPage() {
                     <label className="auth-label">Unique Username</label>
                     <div className="auth-input-wrap">
                       <UserPlus className="auth-input-icon" size={18} />
-                      <input type="text" value={form.username} onChange={e => setForm({...form, username: e.target.value})} className="auth-input auth-input--compact" placeholder="counsel_24" required />
+                      <input type="text" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} className="auth-input auth-input--compact" placeholder="counsel_24" required />
                     </div>
                   </div>
 
@@ -76,7 +76,7 @@ export default function RegisterPage() {
                     <label className="auth-label">Access Password</label>
                     <div className="auth-input-wrap">
                       <Lock className="auth-input-icon" size={18} />
-                      <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} className="auth-input auth-input--compact" placeholder="••••••••" required />
+                      <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} className="auth-input auth-input--compact" placeholder="••••••••" required />
                     </div>
                   </div>
                 </div>
@@ -143,7 +143,7 @@ export default function RegisterPage() {
             </div>
 
             <div className="auth-brand-footer" style={{ marginTop: '2rem' }}>
-              © 2024 LexDraft Enterprise Legal Systems
+              &copy; {new Date().getFullYear()} LexDraft Enterprise Legal Systems
             </div>
           </div>
 

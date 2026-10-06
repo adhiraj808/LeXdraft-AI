@@ -8,6 +8,7 @@ const NAV = [
   { to: '/cases/new',  label: 'New Draft'  },
   { to: '/cases/newchat', label: 'New Chat' },
   { to: '/cases',      label: 'My Cases'   },
+  { to: '/admin',      label: 'Admin'      },
 ]
 
 export default function Layout({ children }) {

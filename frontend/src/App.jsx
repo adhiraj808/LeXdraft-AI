@@ -9,6 +9,7 @@ import NewCasePage from './pages/NewCasePage'
 import NewChatPage from './pages/NewChatPage'
 import CaseListPage from './pages/CaseListPage'
 import CaseDetailPage from './pages/CaseDetailPage'
+import AdminPage from './pages/AdminPage'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/cases/new" element={<ProtectedRoute><NewCasePage /></ProtectedRoute>} />
           <Route path="/cases/newchat" element={<ProtectedRoute><NewChatPage /></ProtectedRoute>} />
           <Route path="/cases/:id" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

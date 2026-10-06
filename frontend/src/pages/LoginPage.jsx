@@ -49,7 +49,7 @@ export default function LoginPage() {
               </div>
 
               <h2 className="auth-headline animate-fade-up stagger-1">
-                Precision Drafting <br/>
+                Precision Drafting <br />
                 <span className="auth-headline-accent">Simplified.</span>
               </h2>
 
@@ -73,7 +73,7 @@ export default function LoginPage() {
             </div>
 
             <div className="auth-brand-footer animate-fade-up stagger-3">
-              © 2024 LexDraft Enterprise Legal Systems
+              &copy; {new Date().getFullYear()} LexDraft Enterprise Legal Systems
             </div>
           </div>
 
@@ -96,7 +96,7 @@ export default function LoginPage() {
                     <input
                       type="text"
                       value={form.username}
-                      onChange={e => setForm(f => ({...f, username: e.target.value}))}
+                      onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
                       className="auth-input"
                       placeholder="Username"
                       required
@@ -114,7 +114,7 @@ export default function LoginPage() {
                     <input
                       type="password"
                       value={form.password}
-                      onChange={e => setForm(f => ({...f, password: e.target.value}))}
+                      onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
                       className="auth-input"
                       placeholder="••••••••"
                       required

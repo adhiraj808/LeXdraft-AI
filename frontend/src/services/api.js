@@ -45,4 +45,13 @@ export const casesAPI = {
 
 export const healthAPI = { check: () => api.get('/health') }
 
+export const adminAPI = {
+  users: () => api.get('/admin/users'),
+  setRole: (id, role) => api.patch(`/admin/users/${id}`, { role }),
+  deleteUser: (id) => api.delete(`/admin/users/${id}`),
+  cases: (skip = 0, limit = 100) => api.get(`/admin/cases?skip=${skip}&limit=${limit}`),
+  deleteCase: (id) => api.delete(`/admin/cases/${id}`),
+  reprocess: (id) => api.post(`/admin/cases/${id}/reprocess`),
+}
+
 export default api

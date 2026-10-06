@@ -34,8 +34,8 @@ export function Composer(props) {
     <div className="composer-wrap">
       <form className="composer" onSubmit={submit}>
         <label className="composer-label" htmlFor="lexdraft-query">
-          <Icon name="Sparkles" size={14} />
-          Message LexDraft
+          <Icon name="Sparkles" size={12} />
+          Message LexDraft AI
         </label>
         <textarea
           aria-label="Describe your case"

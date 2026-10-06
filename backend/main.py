@@ -14,7 +14,7 @@ from app.core.logging import setup_logging
 from app.db.postgres import init_db
 from app.db.redis_client import init_redis
 from app.nlp.pipeline import NLPPipeline
-from app.api.routes import auth, cases, health, rag
+from app.api.routes import admin, auth, cases, health, rag
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
     app.include_router(cases.router, prefix="/api/v1/cases", tags=["cases"])
     app.include_router(rag.router, prefix="/api/v1/rag", tags=["rag"])
+    app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 
     return app
 

@@ -5,7 +5,7 @@ import { Icon } from './Icons'
 const navItems = [
   { icon: 'Folder', label: 'My Cases', href: '/cases' },
   { icon: 'New', label: 'New Case (Form)', href: '/cases/new' },
-  { icon: 'Sparkles', label: 'New Case (Chat)', href: '/cases/newchat' },
+  // { icon: 'Sparkles', label: 'New Case (Chat)', href: '/cases/newchat' },
 ]
 
 export function timeAgo(iso) {
@@ -52,7 +52,7 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents }) {
           </svg>
         </div>
         <div className="brand-type">
-          <span className="brand-name">LEXDRAFT</span>
+          <span className="brand-name">LexDraft</span>
           <span className="brand-subtitle">LEGAL INTELLIGENCE</span>
         </div>
       </div>
