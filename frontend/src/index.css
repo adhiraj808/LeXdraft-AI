@@ -314,6 +314,10 @@ html.dark .btn-accent {
 }
 
 .btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
   background: var(--surface-soft);
   color: var(--text-dim);
   border: 1px solid var(--border-color);
@@ -2524,9 +2528,34 @@ html.dark .detail-card-bg-icon {
 .draft-frame {
   background: var(--surface-soft);
   border: 1px solid var(--border-color);
-  border-radius: 1.5rem;
-  padding: 0.25rem;
+  border-radius: 1rem;
+  padding: 1rem;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+.btn-gold {
+  background: var(--gold);
+  color: var(--navy);
+  font-weight: 600;
+}
+
+.btn-gold:hover:not(:disabled) {
+  background: var(--gold-light);
+}
+
+.input-dark {
+  background: var(--navy);
+  border: 1px solid var(--border-color);
+  color: var(--cream);
+  outline: none;
+}
+
+.input-dark::placeholder {
+  color: var(--text-faint);
+}
+
+.input-dark:focus {
+  border-color: var(--gold);
 }
 
 .center-loading {

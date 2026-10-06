@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 const SECTIONS = [
   { key:'title_block',        label:'Title Block & Case Caption',           num:'I'   },
   { key:'complaint_body',     label:'Complaint — Most Respectfully Showeth',num:'II'  },
@@ -18,9 +19,9 @@ function Section({ num, label, sectionKey, content, onRegenerate }) {
         <span style={{ fontFamily:'DM Mono, monospace', fontSize:10, color:'var(--gold)', opacity:0.6, width:28, flexShrink:0 }}>{num}</span>
         <span style={{ fontSize:11, letterSpacing:'0.08em', textTransform:'uppercase', color:'var(--cream-dim)', flex:1 }}>{label}</span>
         <div onClick={e => { e.stopPropagation(); setRegenOpen(o => !o) }}
-          style={{ fontSize:11, color:'var(--gold)', opacity:0.6, padding:'2px 8px', border:'1px solid var(--border-strong)', borderRadius:4, cursor:'pointer' }}
+          style={{ display:'flex', alignItems:'center', fontSize:11, color:'var(--gold)', opacity:0.6, padding:'2px 8px', border:'1px solid var(--border-strong)', borderRadius:4, cursor:'pointer', lineHeight:1.6 }}
           onMouseEnter={e => e.currentTarget.style.opacity=1} onMouseLeave={e => e.currentTarget.style.opacity=0.6}>Regenerate</div>
-        <span style={{ color:'var(--cream-dim)', opacity:0.3, fontSize:12, display:'inline-block', transition:'transform 0.2s', transform:open?'rotate(180deg)':'none' }}>▼</span>
+        <span style={{ color:'var(--cream-dim)', opacity:0.3, display:'inline-flex', alignItems:'center', lineHeight:0, transition:'transform 0.2s', transform:open?'rotate(180deg)':'none' }}><ChevronDown size={14} /></span>
       </div>
       {regenOpen && (
         <div style={{ padding:'12px 18px', background:'rgba(201,168,76,0.05)', borderBottom:'1px solid var(--border)', display:'flex', gap:8 }}>

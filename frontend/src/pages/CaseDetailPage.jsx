@@ -79,7 +79,7 @@ export default function CaseDetailPage() {
         <div className="detail-actions">
           {caseData.draft && (
             <>
-              <button onClick={() => regenerate('all', '')} className="btn-outline">
+              <button onClick={() => regenerate('all', '')} className="btn btn-outline">
                 <RefreshCw size={14} /> Regenerate Draft
               </button>
               <button onClick={exportPdf} className="btn btn-accent">
