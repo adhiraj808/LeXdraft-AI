@@ -23,7 +23,7 @@ export default function App() {
           <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/cases"     element={<ProtectedRoute><CaseListPage /></ProtectedRoute>} />
           <Route path="/cases/new" element={<ProtectedRoute><NewCasePage /></ProtectedRoute>} />
-          <Route path="/cases/newchat" element={<ProtectedRoute><NewChatPage /></ProtectedRoute>} />
+          <Route path="/cases/aichat" element={<ProtectedRoute><NewChatPage /></ProtectedRoute>} />
           <Route path="/cases/:id" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
           <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
 

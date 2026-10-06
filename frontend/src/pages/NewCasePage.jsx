@@ -127,7 +127,7 @@ export default function NewCasePage() {
           <p>Fill in the details below to generate an AI-powered legal draft.</p>
           <p>
             Prefer talking it through?{' '}
-            <Link to="/cases/newchat" className="empty-link">
+            <Link to="/cases/aichat" className="empty-link">
               Try chat mode
             </Link>
           </p>

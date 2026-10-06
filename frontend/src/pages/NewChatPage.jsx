@@ -85,6 +85,19 @@ export default function NewChatPage() {
 
   useEffect(() => { fetchRecents() }, [])
 
+  const startNewChat = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    try { recognitionRef.current && recognitionRef.current.stop() } catch (e) { /* noop */ }
+    setMessages([])
+    setMessage('')
+    setAttachments([])
+    setIsLoading(false)
+    setIsListening(false)
+    setVoiceNotice('')
+    setContextInfo({ extracted: [], sources: [], activity: [] })
+    navigate('/cases/aichat')
+  }
+
   const describeError = (err, fallback) => {
     if (!err.response) return 'Cannot reach backend — check your connection and that the API is running.'
     const detail = err.response.data && err.response.data.detail
@@ -248,7 +261,7 @@ export default function NewChatPage() {
 
   return (
     <div className="chat-page">
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} recents={recents} />
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} recents={recents} onNewChat={startNewChat} />
       <SidebarOverlay isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <main className="chat-main">

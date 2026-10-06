@@ -5,7 +5,7 @@ import { Icon } from './Icons'
 const navItems = [
   { icon: 'Folder', label: 'My Cases', href: '/cases' },
   { icon: 'New', label: 'New Case (Form)', href: '/cases/new' },
-  // { icon: 'Sparkles', label: 'New Case (Chat)', href: '/cases/newchat' },
+  //   { icon: 'Sparkles', label: 'AI Chat', href: '/cases/aichat' },
 ]
 
 export function timeAgo(iso) {
@@ -21,7 +21,7 @@ export function timeAgo(iso) {
   return new Date(iso).toLocaleDateString()
 }
 
-export function Sidebar({ isOpen, onClose, onNavigate, recents }) {
+export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuth()
@@ -41,8 +41,8 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents }) {
 
   return (
     <aside className={'chat-sidebar' + (isOpen ? ' open' : '')}>
-      <div className="brand">
-        <div className="brand-mark">
+      <div className="chat-brand">
+        <div className="chat-brand-mark">
           <svg width="20" height="20" viewBox="0 0 28 28" fill="none" aria-hidden="true">
             <path d="M14 5L6 10v3h16v-3L14 5z" fill="currentColor" />
             <rect x="7" y="14" width="2" height="7" fill="currentColor" opacity="0.7" />
@@ -51,22 +51,22 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents }) {
             <rect x="5" y="21" width="18" height="2" rx="1" fill="currentColor" />
           </svg>
         </div>
-        <div className="brand-type">
-          <span className="brand-name">LexDraft</span>
-          <span className="brand-subtitle">LEGAL INTELLIGENCE</span>
+        <div className="chat-brand-type">
+          <span className="chat-brand-name">LexDraft</span>
+          <span className="chat-brand-subtitle">LEGAL INTELLIGENCE</span>
         </div>
       </div>
 
-      <button className="new-chat-button" type="button" onClick={() => go('/cases/newchat')}>
+      <button className="chat-new-convo" type="button" onClick={() => { if (onNewChat) onNewChat(); else go('/cases/aichat') }}>
         <Icon name="New" size={16} />
         <span>New conversation</span>
       </button>
 
-      <nav className="main-nav" aria-label="Primary">
-        <span className="nav-label">WORKSPACE</span>
+      <nav className="chat-main-nav" aria-label="Primary">
+        <span className="chat-nav-label">WORKSPACE</span>
         {navItems.map((item) => (
           <Link
-            className={'nav-item' + (location.pathname === item.href ? ' active' : '')}
+            className={'chat-nav-item' + (location.pathname === item.href ? ' active' : '')}
             key={item.label}
             to={item.href}
             onClick={(e) => { e.preventDefault(); go(item.href) }}
@@ -77,16 +77,16 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents }) {
         ))}
       </nav>
 
-      <section className="history">
-        <div className="section-heading">
+      <section className="chat-history">
+        <div className="chat-section-heading">
           <span>RECENT DRAFTS</span>
         </div>
         {(!recents || recents.length === 0) ? (
-          <div className="history-empty">No drafts yet — send your first prompt.</div>
+          <div className="chat-history-empty">No drafts yet — send your first prompt.</div>
         ) : (
           recents.map((c) => (
             <button
-              className="history-item"
+              className="chat-history-item"
               key={c.id}
               type="button"
               title={c.title}
@@ -102,19 +102,22 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents }) {
         )}
       </section>
 
-      <div className="sidebar-footer">
-        <button
-          className="profile"
-          type="button"
-          onClick={() => { logout(); navigate('/login') }}
-          title="Sign out"
-        >
-          <span className="avatar">{initials}</span>
-          <span className="profile-copy">
+      <div className="chat-sidebar-footer">
+        <div className="chat-profile" title="Signed in">
+          <span className="chat-avatar">{initials}</span>
+          <span className="chat-profile-copy">
             <strong>{(user && (user.full_name || user.username)) || 'Counsel'}</strong>
             <small>{(user && user.role) || 'advocate'}</small>
           </span>
-        </button>
+          <button
+            className="chat-signout"
+            type="button"
+            onClick={() => { logout(); navigate('/login') }}
+            title="Sign out"
+          >
+            <Icon name="Logout" size={16} />
+          </button>
+        </div>
       </div>
     </aside>
   )

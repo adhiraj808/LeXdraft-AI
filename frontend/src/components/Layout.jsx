@@ -5,10 +5,10 @@ import { Sun, Moon } from 'lucide-react'
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
-  { to: '/cases/new',  label: 'New Draft'  },
-  { to: '/cases/newchat', label: 'New Chat' },
-  { to: '/cases',      label: 'My Cases'   },
-  { to: '/admin',      label: 'Admin'      },
+  { to: '/cases/new', label: 'New Draft' },
+  { to: '/cases/aichat', label: 'AI Chat' },
+  { to: '/cases', label: 'My Cases' },
+  { to: '/admin', label: 'Admin' },
 ]
 
 export default function Layout({ children }) {
@@ -24,11 +24,11 @@ export default function Layout({ children }) {
           <Link to="/dashboard" className="brand">
             <div className="brand-icon">
               <svg width="24" height="24" viewBox="0 0 28 28" fill="none">
-                <path d="M14 5L6 10v3h16v-3L14 5z" fill="currentColor"/>
-                <rect x="7" y="14" width="2" height="7" fill="currentColor" opacity="0.7"/>
-                <rect x="13" y="14" width="2" height="7" fill="currentColor" opacity="0.7"/>
-                <rect x="19" y="14" width="2" height="7" fill="currentColor" opacity="0.7"/>
-                <rect x="5" y="21" width="18" height="2" rx="1" fill="currentColor"/>
+                <path d="M14 5L6 10v3h16v-3L14 5z" fill="currentColor" />
+                <rect x="7" y="14" width="2" height="7" fill="currentColor" opacity="0.7" />
+                <rect x="13" y="14" width="2" height="7" fill="currentColor" opacity="0.7" />
+                <rect x="19" y="14" width="2" height="7" fill="currentColor" opacity="0.7" />
+                <rect x="5" y="21" width="18" height="2" rx="1" fill="currentColor" />
               </svg>
             </div>
             <span className="brand-name">
@@ -74,7 +74,7 @@ export default function Layout({ children }) {
       </main>
 
       <footer className="app-footer">
-        LexDraft AI — Academic Use Only — Not Legal Advice
+        LexDraft AI — Academic Use Only — Not Legal Advice v0.1
       </footer>
     </div>
   )

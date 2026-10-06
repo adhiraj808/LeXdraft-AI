@@ -2622,14 +2622,14 @@ html.dark .detail-card-bg-icon {
   overflow-y: auto;
 }
 
-.chat-sidebar .brand {
+.chat-sidebar .chat-brand {
   display: flex;
   align-items: center;
   gap: 11px;
   padding: 0 10px 22px;
 }
 
-.chat-sidebar .brand-mark {
+.chat-sidebar .chat-brand-mark {
   display: grid;
   place-items: center;
   width: 34px;
@@ -2641,26 +2641,26 @@ html.dark .detail-card-bg-icon {
   font-size: 20px;
 }
 
-.chat-sidebar .brand-type {
+.chat-sidebar .chat-brand-type {
   display: flex;
   flex-direction: column;
 }
 
-.chat-sidebar .brand-name {
+.chat-sidebar .chat-brand-name {
   font-size: 15px;
   letter-spacing: 0.12em;
   font-weight: 700;
   color: #fff;
 }
 
-.chat-sidebar .brand-subtitle {
+.chat-sidebar .chat-brand-subtitle {
   font-size: 7px;
   font-weight: 700;
   letter-spacing: 0.18em;
   color: #95aaa3;
 }
 
-.new-chat-button {
+.chat-new-convo {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2675,17 +2675,17 @@ html.dark .detail-card-bg-icon {
   cursor: pointer;
 }
 
-.new-chat-button:hover {
+.chat-new-convo:hover {
   background: #234a45;
 }
 
-.chat-sidebar .main-nav {
+.chat-sidebar .chat-main-nav {
   margin-top: 22px;
   display: flex;
   flex-direction: column;
 }
 
-.chat-sidebar .nav-label {
+.chat-sidebar .chat-nav-label {
   display: block;
   padding: 0 10px 8px;
   color: #718781;
@@ -2694,7 +2694,7 @@ html.dark .detail-card-bg-icon {
   letter-spacing: 0.16em;
 }
 
-.chat-sidebar .nav-item {
+.chat-sidebar .chat-nav-item {
   display: flex;
   align-items: center;
   gap: 11px;
@@ -2705,30 +2705,30 @@ html.dark .detail-card-bg-icon {
   margin: 2px 0;
 }
 
-.chat-sidebar .nav-item:hover {
+.chat-sidebar .chat-nav-item:hover {
   color: #fff;
   background: #1a3b37;
 }
 
-.chat-sidebar .history {
+.chat-sidebar .chat-history {
   margin-top: 24px;
 }
 
-.chat-sidebar .section-heading {
+.chat-sidebar .chat-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 10px 8px;
 }
 
-.chat-sidebar .section-heading span {
+.chat-sidebar .chat-section-heading span {
   color: #718781;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.16em;
 }
 
-.chat-sidebar .history-item {
+.chat-sidebar .chat-history-item {
   display: flex;
   width: 100%;
   flex-direction: column;
@@ -2743,42 +2743,58 @@ html.dark .detail-card-bg-icon {
   cursor: pointer;
 }
 
-.chat-sidebar .history-item:hover,
-.chat-sidebar .history-item.selected {
+.chat-sidebar .chat-history-item:hover,
+.chat-sidebar .chat-history-item.selected {
   color: #fff;
   background: rgba(255, 255, 255, 0.055);
 }
 
-.chat-sidebar .history-item small {
+.chat-sidebar .chat-history-item small {
   color: #667d76;
   font-size: 9px;
 }
 
-.chat-sidebar .history-empty {
+.chat-sidebar .chat-history-empty {
   padding: 9px 10px;
   color: #667d76;
   font-size: 11px;
 }
 
-.chat-sidebar .sidebar-footer {
+.chat-sidebar .chat-sidebar-footer {
   margin-top: auto;
   padding-top: 14px;
   border-top: 1px solid #29443f;
 }
 
-.chat-sidebar .profile {
+.chat-sidebar .chat-profile {
   display: flex;
   align-items: center;
   width: 100%;
   padding: 4px 6px;
-  border: 0;
-  background: transparent;
   color: #eaf0ee;
   text-align: left;
+}
+
+.chat-sidebar .chat-signout {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-left: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #9db3ac;
   cursor: pointer;
 }
 
-.chat-sidebar .avatar {
+.chat-sidebar .chat-signout:hover {
+  color: #fff;
+  background: #2a4a44;
+  border-color: #3c6058;
+}
+
+.chat-sidebar .chat-avatar {
   display: grid;
   place-items: center;
   width: 32px;
@@ -2791,18 +2807,18 @@ html.dark .detail-card-bg-icon {
   font-weight: 700;
 }
 
-.chat-sidebar .profile-copy {
+.chat-sidebar .chat-profile-copy {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 2px;
 }
 
-.chat-sidebar .profile-copy strong {
+.chat-sidebar .chat-profile-copy strong {
   font-size: 11px;
 }
 
-.chat-sidebar .profile-copy small {
+.chat-sidebar .chat-profile-copy small {
   color: #788e88;
   font-size: 9px;
 }
