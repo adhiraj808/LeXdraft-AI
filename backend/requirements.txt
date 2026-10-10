@@ -4,7 +4,7 @@
 # and spacy>=3.8.7 (uses typer-slim, no conflict).
 fastapi>=0.115,<0.117
 uvicorn[standard]>=0.30,<0.35
-python-multipart>=0.0.9
+python-multipart>=0.0.32
 
 # Auth
 python-jose[cryptography]>=3.3.0
