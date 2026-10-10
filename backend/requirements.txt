@@ -35,7 +35,7 @@ spacy>=3.8.7
 # and the template generator covers drafts without it.
 transformers>=4.41.1
 torch>=2.3.0
-tokenizers>=0.19.1
+tokenizers>=0.23.2
 sentencepiece>=0.2.0
 accelerate>=0.30.0
 huggingface-hub>=0.23.2
