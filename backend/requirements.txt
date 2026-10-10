@@ -1,7 +1,7 @@
 # Web framework
 # NOTE: fastapi==0.111.0 pulls fastapi-cli which needs typer>=0.12,
 # incompatible with spacy==3.7.4 (typer<0.10). Use flexible ranges
-# and spacy>=3.8.7 (uses typer-slim, no conflict).
+# and spacy>=3.8.16 (uses typer-slim, no conflict).
 fastapi>=0.115,<0.117
 uvicorn[standard]>=0.30,<0.35
 python-multipart>=0.0.9
@@ -28,7 +28,7 @@ pydantic-settings>=2.3.1
 email-validator>=2.0.0
 
 # NLP & ML - core lightweight
-spacy>=3.8.7
+spacy>=3.8.16
 
 # NLP & ML - full stack (RAG + embeddings + transformers, CPU).
 # llama-cpp-python stays OFF: needs a GGUF model file + long compile,
