@@ -41,7 +41,7 @@ accelerate>=0.30.0
 huggingface-hub>=0.23.2
 sentence-transformers>=3.0.1
 chromadb>=0.5.23
-llama-cpp-python>=0.2.76
+llama-cpp-python>=0.3.36
 # Training (host-side dataset + fine-tune; not needed at runtime)
 pandas>=2.0
 scikit-learn>=1.3
