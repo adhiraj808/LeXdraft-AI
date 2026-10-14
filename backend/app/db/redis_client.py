@@ -54,11 +54,15 @@ async def cache_case_data(case_id: str, data: dict, ttl: int = None) -> None:
     """Store complete case processing data in Redis."""
     r = get_redis()
     ttl = ttl or settings.REDIS_TTL_SECONDS
-    await r.hset(_case_key(case_id), mapping={
+    key = _case_key(case_id)
+    mapping = {
         k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
         for k, v in data.items()
-    })
-    await r.expire(_case_key(case_id), ttl)
+    }
+    async with r.pipeline(transaction=True) as pipe:
+        await pipe.hset(key, mapping=mapping)
+        await pipe.expire(key, ttl)
+        await pipe.execute()
 
 
 async def get_case_data(case_id: str) -> Optional[dict]:
