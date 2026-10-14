@@ -63,6 +63,13 @@ async def client(db_session, mock_user):
     mock_redis.ping = AsyncMock(return_value=True)
     mock_redis.hset = AsyncMock(return_value=None)
     mock_redis.expire = AsyncMock(return_value=None)
+    mock_pipeline = MagicMock()
+    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
+    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
+    mock_pipeline.hset = AsyncMock(return_value=None)
+    mock_pipeline.expire = AsyncMock(return_value=None)
+    mock_pipeline.execute = AsyncMock(return_value=[])
+    mock_redis.pipeline.return_value = mock_pipeline
     mock_redis.hgetall = AsyncMock(return_value={})
     mock_redis.set = AsyncMock(return_value=None)
     mock_redis.get = AsyncMock(return_value=None)
