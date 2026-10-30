@@ -74,7 +74,16 @@ export default function Layout({ children }) {
       </main>
 
       <footer className="app-footer">
-        LexDraft AI — Academic Use Only — Not Legal Advice v0.1
+        <span>LexDraft AI — Academic Use Only — Not Legal Advice v0.1</span>
+        <span className="footer-sep">·</span>
+        <a
+          href="https://github.com/adhiraj808/LeXdraft-AI/blob/main/LICENSE.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="footer-license"
+        >
+          MIT License
+        </a>
       </footer>
     </div>
   )

@@ -41,6 +41,8 @@ export const casesAPI = {
   regenerate: (id, section, additionalContext = null) =>
     api.post(`/cases/${id}/regenerate`, { section, additional_context: additionalContext }),
   exportPdf: (id) => api.get(`/cases/${id}/export/pdf`, { responseType: 'blob' }),
+  getModels: () => api.get('/admin/models-public'),
+  ask: (data) => api.post('/ask', data),
 }
 
 export const healthAPI = { check: () => api.get('/health') }
@@ -52,6 +54,15 @@ export const adminAPI = {
   cases: (skip = 0, limit = 100) => api.get(`/admin/cases?skip=${skip}&limit=${limit}`),
   deleteCase: (id) => api.delete(`/admin/cases/${id}`),
   reprocess: (id) => api.post(`/admin/cases/${id}/reprocess`),
+  status: () => api.get('/admin/status'),
+  toggleLLM: () => api.post('/admin/toggle-llm'),
+  setModel: (model) => api.post('/admin/set-model', { model }),
+  addModel: (model) => api.post('/admin/add-model', model),
+  deleteModel: (id) => api.delete(`/admin/models/${id}`),
+  getModels: () => api.get('/admin/models'),
+  blockUser: (userId, removeData = false) => api.post('/admin/block-user', { user_id: userId, remove_data: removeData }),
+  unblockUser: (userId) => api.post('/admin/unblock-user', { user_id: userId }),
+  deleteUserData: (userId) => api.post('/admin/delete-user-data', { user_id: userId }),
 }
 
 export default api

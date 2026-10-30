@@ -89,4 +89,5 @@ npm run dev
 
 ## License
 
-MIT License
+MIT License — see [LICENSE.md](./LICENSE.md).
+Source: [adhiraj808/LeXdraft-AI](https://github.com/adhiraj808/LeXdraft-AI)

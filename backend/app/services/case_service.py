@@ -16,14 +16,22 @@ from app.db.redis_client import (
     get_draft, update_case_status, delete_case_cache, publish_progress
 )
 
+# Concurrency control for memory optimization
+_processing_semaphore = asyncio.Semaphore(2)  # Limit concurrent draft generation
+
 logger = logging.getLogger(__name__)
 
 
 def _model_name(nlp_pipeline) -> str:
     """Human-readable label for which generator produced a draft."""
     gen = getattr(nlp_pipeline, "generator", None)
-    if getattr(gen, "use_groq", False):
-        return "groq"
+    if gen is None:
+        return "unknown"
+    label = getattr(gen, "model_label", None)
+    if label:
+        return label
+    if getattr(gen, "_provider", None):
+        return gen._provider
     if getattr(gen, "use_model", False):
         return "local-llm"
     return "template"
@@ -94,92 +102,98 @@ class CaseService:
             )
         return await self.create_case(payload, user)
 
-    async def process_case(self, case_id: str, nlp_pipeline) -> Case:
-        """Run the NLP pipeline on a case and persist results."""
-        result = await self.db.execute(
-            select(Case).where(Case.id == case_id)
-        )
-        case = result.scalar_one_or_none()
-        if not case:
-            raise ValueError(f"Case {case_id} not found")
+    async def process_case(self, case_id: str, nlp_pipeline, strict: bool = False) -> Case:
+        """Run the NLP pipeline on a case and persist results.
 
-        try:
-            await update_case_status(case_id, "processing")
-            case.status = "processing"
-            await self.db.commit()
-
-            await publish_progress(case_id, "preprocessing")
-
-            case_input = {
-                "title": case.title,
-                "case_description": case.case_description,
-                "petitioner_name": case.petitioner_name,
-                "respondent_name": case.respondent_name,
-                "incident_date": case.incident_date,
-                "jurisdiction": case.jurisdiction,
-                "relief_sought": case.relief_sought,
-            }
-
-            # Run full NLP pipeline
-            pipeline_result = await nlp_pipeline.process(case_input)
-
-            await publish_progress(case_id, "saving_results")
-
-            # Persist NLP outputs to PostgreSQL
-            classification = pipeline_result["classification"]
-            case.case_type = classification["case_type"]
-            case.case_type_confidence = classification["confidence"]
-            case.extracted_entities = pipeline_result["entities"]
-            case.status = "completed"
-
-            draft_sections = pipeline_result["draft_sections"]
-            gen_time = draft_sections.pop("_generation_time", None)
-            full_text = draft_sections.pop("_full_text", None)
-
-            # Upsert draft
-            draft_result = await self.db.execute(
-                select(Draft).where(Draft.case_id == case_id)
+        strict=True (AI-chat flow): no template fallback — if the model
+        can't generate, the case is marked 'failed' and no draft is stored.
+        """
+        # Limit concurrent draft generation to control memory usage
+        async with _processing_semaphore:
+            result = await self.db.execute(
+                select(Case).where(Case.id == case_id)
             )
-            existing_draft = draft_result.scalar_one_or_none()
+            case = result.scalar_one_or_none()
+            if not case:
+                raise ValueError(f"Case {case_id} not found")
 
-            if existing_draft:
-                existing_draft.sections = draft_sections
-                existing_draft.full_text = full_text
-                existing_draft.version += 1
-                existing_draft.generation_time_seconds = gen_time
-                existing_draft.model_used = "flan-t5" if nlp_pipeline.generator.use_model else "template"
-                draft = existing_draft
-            else:
-                draft = Draft(
-                    case_id=case_id,
-                    sections=draft_sections,
-                    full_text=full_text,
-                    version=1,
-                    model_used=_model_name(nlp_pipeline),
-                    generation_time_seconds=gen_time,
+            try:
+                await update_case_status(case_id, "processing")
+                case.status = "processing"
+                await self.db.commit()
+
+                await publish_progress(case_id, "preprocessing")
+
+                case_input = {
+                    "title": case.title,
+                    "case_description": case.case_description,
+                    "petitioner_name": case.petitioner_name,
+                    "respondent_name": case.respondent_name,
+                    "incident_date": case.incident_date,
+                    "jurisdiction": case.jurisdiction,
+                    "relief_sought": case.relief_sought,
+                }
+
+                # Run full NLP pipeline
+                pipeline_result = await nlp_pipeline.process(case_input, strict=strict)
+
+                await publish_progress(case_id, "saving_results")
+
+                # Persist NLP outputs to PostgreSQL
+                classification = pipeline_result["classification"]
+                case.case_type = classification["case_type"]
+                case.case_type_confidence = classification["confidence"]
+                case.extracted_entities = pipeline_result["entities"]
+                case.status = "completed"
+
+                draft_sections = pipeline_result["draft_sections"]
+                gen_time = draft_sections.pop("_generation_time", None)
+                full_text = draft_sections.pop("_full_text", None)
+
+                # Upsert draft
+                draft_result = await self.db.execute(
+                    select(Draft).where(Draft.case_id == case_id)
                 )
-                self.db.add(draft)
+                existing_draft = draft_result.scalar_one_or_none()
 
-            await self.db.commit()
-            await self.db.refresh(case)
+                if existing_draft:
+                    existing_draft.sections = draft_sections
+                    existing_draft.full_text = full_text
+                    existing_draft.version += 1
+                    existing_draft.generation_time_seconds = gen_time
+                    existing_draft.model_used = "flan-t5" if nlp_pipeline.generator.use_model else "template"
+                    draft = existing_draft
+                else:
+                    draft = Draft(
+                        case_id=case_id,
+                        sections=draft_sections,
+                        full_text=full_text,
+                        version=1,
+                        model_used=_model_name(nlp_pipeline),
+                        generation_time_seconds=gen_time,
+                    )
+                    self.db.add(draft)
 
-            # Cache draft in Redis
-            await cache_draft(case_id, {
-                "sections": draft_sections,
-                "full_text": full_text,
-            })
-            await update_case_status(case_id, "completed")
-            await publish_progress(case_id, "completed")
+                await self.db.commit()
+                await self.db.refresh(case)
 
-            return case
+                # Cache draft in Redis
+                await cache_draft(case_id, {
+                    "sections": draft_sections,
+                    "full_text": full_text,
+                })
+                await update_case_status(case_id, "completed")
+                await publish_progress(case_id, "completed")
 
-        except Exception as e:
-            logger.error(f"Pipeline failed for case {case_id}: {e}")
-            case.status = "failed"
-            await self.db.commit()
-            await update_case_status(case_id, "failed")
-            await publish_progress(case_id, "failed")
-            raise
+                return case
+
+            except Exception as e:
+                logger.error(f"Pipeline failed for case {case_id}: {e}")
+                case.status = "failed"
+                await self.db.commit()
+                await update_case_status(case_id, "failed")
+                await publish_progress(case_id, "failed")
+                raise
 
     async def get_case(self, case_id: str, user: User) -> Optional[Case]:
         result = await self.db.execute(

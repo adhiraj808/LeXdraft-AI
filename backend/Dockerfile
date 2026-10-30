@@ -1,23 +1,48 @@
-FROM python:3.11-slim
+# =============================================================================
+# Legal Draft AI - Optimized Multi-Stage Backend Dockerfile
+# =============================================================================
+# Stage 1: Builder - Install build dependencies and compile wheels
+# Stage 2: Runtime - Minimal runtime with only necessary packages
+# =============================================================================
+
+# ---- Stage 1: Builder ----
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install build dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     libpq-dev \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install CPU-only PyTorch first to manage layer caching
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# Install Python build dependencies and compile wheels (base only)
+COPY requirements-base.txt ./
+RUN pip install --no-cache-dir --upgrade pip wheel setuptools && \
+    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements-base.txt
 
-# Copy and install requirements
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# ---- Stage 2: Runtime ----
+FROM python:3.11-slim AS runtime
 
-# Download spacy model
+WORKDIR /app
+
+# Install only runtime system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-compiled wheels from builder
+COPY --from=builder /wheels /wheels
+
+# Install Python packages from pre-compiled wheels
+COPY requirements-base.txt ./
+RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements-base.txt && \
+    rm -rf /wheels
+
+# Download spaCy model
 RUN python -m spacy download en_core_web_sm
 
 # Copy application code

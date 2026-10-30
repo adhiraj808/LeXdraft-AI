@@ -83,17 +83,18 @@ class NLPPipeline:
         locations = entities.get("locations", [])
         courts = entities.get("courts", [])
         persons = entities.get("persons", [])
+        jurisdiction = case_input.get("jurisdiction") or "India"
 
         return {
             "case_type": classification["case_type"],
             "petitioner": case_input.get("petitioner_name") or (persons[0] if persons else "Petitioner"),
             "respondent": case_input.get("respondent_name") or (persons[1] if len(persons) > 1 else "Respondent"),
-            "court": courts[0] if courts else f"Hon'ble {case_input.get('jurisdiction', 'High Court')}",
+            "court": courts[0] if courts else f"Hon'ble {jurisdiction if jurisdiction != 'India' else 'High Court'}",
             "description": preprocessed["cleaned"],
             "statutes": entities.get("statutes", []) + preprocessed.get("legal_sections", []),
             "dates": entities.get("dates", []),
             "incident_date": case_input.get("incident_date", "the relevant date"),
-            "location": locations[0] if locations else case_input.get("jurisdiction", "India"),
+            "location": locations[0] if locations else jurisdiction,
             "relief_sought": case_input.get("relief_sought", "appropriate relief as deemed fit"),
             "money": entities.get("money", []),
             "rag_context": rag_context,
@@ -108,7 +109,7 @@ class NLPPipeline:
             logger.info("RAG found no relevant precedents, using base generation.")
         return self.retriever.format_context(precedents)
 
-    async def process(self, case_input: Dict) -> Dict:
+    async def process(self, case_input: Dict, strict: bool = False) -> Dict:
         if not self._loaded:
             raise RuntimeError("NLP pipeline not loaded.")
 
@@ -148,7 +149,7 @@ class NLPPipeline:
 
         # Stage 5: Generate draft
         logger.info("Stage 4: Generating legal draft with RAG context...")
-        draft_sections = await asyncio.to_thread(self.generator.generate_all_sections, context)
+        draft_sections = await self.generator.generate_all_sections(context, strict)
 
         return {
             "preprocessed": preprocessed,

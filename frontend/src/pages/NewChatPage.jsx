@@ -17,12 +17,6 @@ function now() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function fmtSize(bytes) {
-  if (!bytes && bytes !== 0) return ''
-  if (bytes < 1024 * 1024) return Math.ceil(bytes / 1024) + ' KB'
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
-}
-
 const SUGGESTIONS = [
   {
     label: 'Cheque Bounce Complaint',
@@ -44,7 +38,6 @@ export default function NewChatPage() {
   const [contextOpen, setContextOpen] = useState(false)
   const [messages, setMessages] = useState([])
   const [message, setMessage] = useState('')
-  const [attachments, setAttachments] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [voiceNotice, setVoiceNotice] = useState('')
@@ -52,7 +45,6 @@ export default function NewChatPage() {
   const [backendUp, setBackendUp] = useState(null)
   const [pollRound, setPollRound] = useState(0)
   const [recents, setRecents] = useState([])
-  const fileInputRef = useRef(null)
   const recognitionRef = useRef(null)
   const pollRef = useRef(null)
   const bottomRef = useRef(null)
@@ -90,12 +82,58 @@ export default function NewChatPage() {
     try { recognitionRef.current && recognitionRef.current.stop() } catch (e) { /* noop */ }
     setMessages([])
     setMessage('')
-    setAttachments([])
     setIsLoading(false)
     setIsListening(false)
     setVoiceNotice('')
     setContextInfo({ extracted: [], sources: [], activity: [] })
     navigate('/cases/aichat')
+  }
+
+  const loadPreviousChat = async (caseId) => {
+    if (!caseId || isLoading) return
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    setIsLoading(true)
+    try {
+      const res = await casesAPI.get(caseId)
+      const d = res.data
+      const userText = d.case_description || d.title || 'Previous case'
+      const assistantText = d.status === 'completed' && d.draft
+        ? 'Draft ready — classified as ' + (d.case_type || 'Unknown') + '. Preview below; open the full draft for all 7 sections + PDF.'
+        : d.status === 'failed'
+          ? 'Draft generation failed for this prompt. Try rephrasing with more detail (parties, dates, amounts).'
+          : 'This draft is still ' + d.status + '. It will appear here when ready.'
+      const preview = d.draft && d.draft.sections
+        ? ((d.draft.sections.complaint_body || d.draft.sections.prayer || '').slice(0, 600) + '...')
+        : null
+      setMessages([
+        { id: Date.now() - 1, role: 'user', content: userText, time: now() },
+        {
+          id: Date.now(), role: 'assistant', time: now(), caseId: d.id,
+          caseType: d.case_type, model: d.draft && d.draft.model_used,
+          content: assistantText, preview,
+        },
+      ])
+      const ents = d.extracted_entities || {}
+      const chips = []
+      const pushChip = (label, vals) => {
+        if (vals && vals.length) chips.push({ label, value: vals.slice(0, 3).join(', ') })
+      }
+      pushChip('PARTIES', [...(ents.persons || []), ...(ents.organizations || [])])
+      pushChip('COURT', ents.courts)
+      pushChip('STATUTES', ents.statutes)
+      pushChip('CASE TYPE', d.case_type ? [d.case_type] : [])
+      setContextInfo((cur) => ({
+        ...cur, caseTitle: d.title, caseType: d.case_type,
+        extracted: chips,
+        sources: (ents.statutes || []).slice(0, 4).map((s) => ({ name: s, meta: 'Identified statute', tone: 'policy' })),
+      }))
+      pushActivity('Opened previous chat')
+    } catch (err) {
+      toast.error(describeError(err, 'Could not open that chat.'))
+    } finally {
+      setIsLoading(false)
+    }
+    if (typeof window !== 'undefined' && window.innerWidth < 900) setSidebarOpen(false)
   }
 
   const describeError = (err, fallback) => {
@@ -145,19 +183,6 @@ export default function NewChatPage() {
     try { recognition.start() } catch (e) { setIsListening(false) }
   }
 
-  const handleFiles = (event) => {
-    const files = Array.from(event.target.files || []).slice(0, 5).map((f) => ({
-      name: f.name,
-      sizeLabel: fmtSize(f.size),
-    }))
-    setAttachments((cur) => [...cur, ...files].slice(0, 5))
-    event.target.value = ''
-  }
-
-  const removeAttachment = (index) => {
-    setAttachments((cur) => cur.filter((_, i) => i !== index))
-  }
-
   const pushActivity = (text) => {
     setContextInfo((cur) => ({
       ...cur,
@@ -165,28 +190,21 @@ export default function NewChatPage() {
     }))
   }
 
-  const handleSubmit = async (promptText, files) => {
+  const handleSubmit = async (promptText) => {
     const text = (promptText || '').trim()
-    if ((!text && (!files || files.length === 0)) || isLoading) return
-
-    let fullPrompt = text
-    if (files && files.length > 0) {
-      const names = files.map((f) => f.name).join(', ')
-      fullPrompt = (text ? text + '\n\n' : '') + '[Attached files for reference: ' + names + ']'
-    }
+    if (!text || isLoading) return
 
     const tempId = Date.now()
     setMessages((cur) => [...cur, {
-      id: tempId, role: 'user', content: text || ('Attached ' + files.length + ' file(s)'), time: now(),
+      id: tempId, role: 'user', content: text, time: now(),
     }])
     setMessage('')
-    setAttachments([])
     setIsLoading(true)
     pushActivity('Prompt submitted')
 
     let caseId = null
     try {
-      const res = await casesAPI.prompt({ prompt: fullPrompt })
+      const res = await casesAPI.prompt({ prompt: text })
       caseId = res.data && res.data.id
       if (!caseId) throw new Error('No case id returned')
       pushActivity('Extracting details + drafting')
@@ -230,7 +248,6 @@ export default function NewChatPage() {
           pushChip('PARTIES', [...(ents.persons || []), ...(ents.organizations || [])])
           pushChip('COURT', ents.courts)
           pushChip('STATUTES', ents.statutes)
-          pushChip('MONEY', ents.money)
           pushChip('DATES', ents.dates)
           pushChip('CASE TYPE', d.case_type ? [d.case_type] : [])
           setContextInfo((cur) => ({
@@ -261,7 +278,7 @@ export default function NewChatPage() {
 
   return (
     <div className="chat-page">
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} recents={recents} onNewChat={startNewChat} />
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} recents={recents} onNewChat={startNewChat} onSelectRecent={loadPreviousChat} />
       <SidebarOverlay isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <main className="chat-main">
@@ -344,20 +361,16 @@ export default function NewChatPage() {
         <Composer
           message={message}
           setMessage={setMessage}
-          attachments={attachments}
           isLoading={isLoading}
           onSubmit={handleSubmit}
           isListening={isListening}
           voiceNotice={voiceNotice}
           toggleVoice={toggleVoice}
-          fileInputRef={fileInputRef}
-          handleFiles={handleFiles}
-          onRemoveAttachment={removeAttachment}
         />
       </main>
 
       <ContextPanel isOpen={contextOpen} onClose={() => setContextOpen(false)} info={contextInfo} />
-      <SidebarOverlay isOpen={contextOpen} onClose={() => setContextOpen(false)} />
+      <SidebarOverlay isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
     </div>
   )
 }

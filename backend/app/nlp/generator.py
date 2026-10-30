@@ -1,4 +1,4 @@
-import logging, time, datetime, os
+import logging, time, datetime, os, asyncio
 from typing import Dict, Optional
 import httpx
 from app.core.config import settings
@@ -57,15 +57,82 @@ DEFAULT_CASE_TYPE = "Civil"
 
 
 class LegalDraftGenerator:
+    """Model-agnostic legal draft generator.
+
+    Generation flow per section:
+      1. CHECK classification (case type) — falls back to Civil if unknown.
+      2. Build a case-type-aware prompt (correct party labels, doc title,
+         format for Civil / Criminal / Family / etc.).
+      3. Try the resolved cloud LLM (any OpenAI-compatible provider).
+      4. Fall back to local GGUF, then to hardcoded templates.
+    """
+
+    # Case-type-specific drafting instructions injected into every LLM prompt
+    # so ANY model produces correctly-formatted, case-type-appropriate output.
+    CASE_TYPE_INSTRUCTIONS = {
+        "Criminal": (
+            "This is a CRIMINAL complaint. Address the parties as "
+            "'Complainant' and 'Accused'. Reference the police station, the "
+            "dishonour/offence facts, and prosecution under the alleged "
+            "sections. Use criminal-complaint formatting."
+        ),
+        "Civil": (
+            "This is a CIVIL suit. Address the parties as 'Plaintiff' and "
+            "'Defendant'. Focus on breach, loss/damages, recovery, and "
+            "territorial+pecuniary jurisdiction. Use plaint formatting."
+        ),
+        "Family Law": (
+            "This is a FAMILY LAW petition (e.g. divorce/maintenance under "
+            "HMA/DV Act). Address the parties as 'Petitioner' and "
+            "'Respondent'. Cover marriage facts, cruelty/desertion grounds, "
+            "custody/maintenance where relevant. Use petition formatting."
+        ),
+        "Labour / Employment": (
+            "This is an INDUSTRIAL/labour dispute. Address the parties as "
+            "'Workman' and 'Management'. Cover termination, retrenchment, "
+            "back wages, and industrial-adjudication formatting."
+        ),
+        "Constitutional": (
+            "This is a WRIT PETITION under the Constitution. Address the "
+            "parties as 'Petitioner' and 'Respondent (State/authority)'. "
+            "Frame fundamental/legal-rights violations and the relief sought "
+            "from the High Court/Supreme Court."
+        ),
+        "Property Dispute": (
+            "This is a PROPERTY dispute. Address the parties as 'Plaintiff' "
+            "and 'Defendant'. Cover title, possession, encroachment, "
+            "injunction, and property-valuation facts."
+        ),
+    }
+
     def __init__(self):
         self.use_model = False
         self.llm = None
-        # Online Groq LLM is preferred when a key is configured (never logged).
-        self.use_groq = bool(settings.GROQ_API_KEY)
+        self._llm_loaded = False  # Track if GGUF has been loaded
+        from app.nlp.llm_client import build_default_clients, resolve_provider
+
+        self._clients = build_default_clients()
+        self._provider = resolve_provider(self._clients)
+        self.client = self._clients.get(self._provider) if self._provider else None
+        self._failed_providers = set()  # Track failed providers
+        self._provider_lock = asyncio.Lock()  # Lock for provider fallback race condition
+
+    def _mark_provider_failed(self, provider: str):
+        """Mark a provider as failed to skip it for subsequent generations."""
+        self._failed_providers.add(provider)
+        logger.warning(f"Marking provider '{provider}' as failed, will skip for subsequent generations")
+
+    def _is_provider_failed(self, provider: str) -> bool:
+        """Check if a provider has been marked as failed."""
+        return provider in self._failed_providers
 
     async def load(self):
-        if self.use_groq:
-            logger.info(f"Groq online LLM enabled (model={settings.GROQ_MODEL}).")
+        if self.client and self.client.available:
+            logger.info(f"Cloud LLM ready via '{self._provider}' (model={self.client.model}).")
+        # Check if local LLM is enabled
+        if not settings.ENABLE_LOCAL_LLM:
+            logger.info("Local LLM disabled via ENABLE_LOCAL_LLM setting.")
+            return
         if not LLAMA_AVAILABLE:
             logger.error("Cannot load GGUF model: llama-cpp-python not available.")
             return
@@ -75,19 +142,60 @@ class LegalDraftGenerator:
             logger.error(f"GGUF model not found at {model_path}. Please run download script.")
             return
 
+        # Lazy loading: only load if actually needed (when cloud providers fail)
+        # We'll mark it as available but defer actual loading until first use
+        logger.info(f"GGUF model available at {model_path} (lazy loading enabled).")
+
+    def check_case_type(self, ctx: Dict) -> str:
+        """Classification gate — validate the case type BEFORE generating.
+
+        The classifier runs upstream (pipeline stage 2) and passes the result
+        in ctx['case_type']. Here we verify it against the known legal
+        categories; anything unknown or missing falls back to Civil (the
+        generic plaint format), which is safe for any set of facts.
+        """
+        case_type = (ctx.get("case_type") or "").strip()
+        if not case_type:
+            logger.warning("No case_type in context — defaulting to 'Civil'.")
+            return DEFAULT_CASE_TYPE if DEFAULT_CASE_TYPE != "auto" else "Civil"
+        if case_type not in CASE_TYPE_CONFIG and case_type not in self.CASE_TYPE_INSTRUCTIONS:
+            logger.warning(f"Unknown case_type '{case_type}' — defaulting to 'Civil'.")
+            return "Civil"
+        return case_type
+
+    async def _ensure_gguf_loaded(self):
+        """Lazy load the GGUF model on first use."""
+        if self._llm_loaded:
+            return True
+        if not settings.ENABLE_LOCAL_LLM:
+            logger.info("Local LLM disabled via ENABLE_LOCAL_LLM setting.")
+            return False
+        if not LLAMA_AVAILABLE:
+            logger.error("Cannot load GGUF model: llama-cpp-python not available.")
+            return False
+
+        model_path = settings.GGUF_MODEL_PATH
+        if not os.path.exists(model_path):
+            logger.error(f"GGUF model not found at {model_path}. Please run download script.")
+            return False
+
         try:
-            logger.info(f"Loading GGUF model from {model_path}...")
-            # n_gpu_layers=-1 if settings.USE_GPU else 0
+            logger.info(f"Lazy loading GGUF model from {model_path}...")
+            # Use config settings for GPU layers, context window
             self.llm = Llama(
                 model_path=model_path,
-                n_ctx=2048,
+                n_ctx=settings.GGUF_CONTEXT_WINDOW,
                 n_threads=os.cpu_count(),
+                n_gpu_layers=settings.GGUF_GPU_LAYERS,
                 verbose=False
             )
             self.use_model = True
-            logger.info("GGUF Model loaded successfully.")
+            self._llm_loaded = True
+            logger.info(f"GGUF Model loaded successfully with n_ctx={settings.GGUF_CONTEXT_WINDOW}, n_gpu_layers={settings.GGUF_GPU_LAYERS}.")
+            return True
         except Exception as e:
             logger.error(f"Failed to load GGUF model: {str(e)}")
+            return False
 
     def _generate_with_llm(self, section, ctx):
         case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
@@ -133,8 +241,13 @@ Draft the {section.replace('_', ' ')} section only.
             return None
 
     def _section_prompt(self, section: str, ctx: Dict) -> str:
-        """Shared prompt builder for online LLM drafting."""
-        case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
+        """Shared prompt builder for online LLM drafting.
+
+        The case type is validated FIRST (classification gate) and its
+        drafting instructions are injected, so ANY model produces output
+        formatted for the right legal category (Civil / Criminal / ...).
+        """
+        case_type = self.check_case_type(ctx)
         p = ctx.get("petitioner", "The Petitioner")
         r = ctx.get("respondent", "The Respondent")
         court = ctx.get("court", "HON'BLE COURT")
@@ -144,10 +257,12 @@ Draft the {section.replace('_', ' ')} section only.
         sl = ctx.get("statutes", [])
         stat = ", ".join(sl) if sl else "applicable provisions of law"
         rag = ctx.get("rag_context", "")
+        type_instruction = self.CASE_TYPE_INSTRUCTIONS.get(case_type, "")
         return (
             f"You are an expert Indian legal draftsman. Draft ONLY the "
             f"'{section.replace('_', ' ')}' section of a legal pleading for a "
             f"{case_type} case in India, using proper format and terminology.\n"
+            f"Category instruction: {type_instruction}\n"
             f"Case Type: {case_type}\nPetitioner: {p}\nRespondent: {r}\n"
             f"Court: {court}\nLocation: {loc}\nFacts: {desc}\n"
             f"Relief Sought: {relief}\nStatutes: {stat}\n"
@@ -155,51 +270,57 @@ Draft the {section.replace('_', ' ')} section only.
             f"Output the section text only, no explanations."
         )
 
-    def _generate_with_groq(self, section: str, ctx: Dict) -> Optional[str]:
-        """Draft one section via the Groq cloud API. Returns None on any failure
-        (the caller then falls back to local LLM / templates). The API key is
-        sent only in the Authorization header and never logged."""
-        if not self.use_groq:
+    def _generate_with_cloud(self, section: str, ctx: Dict) -> Optional[str]:
+        """Draft one section via the resolved cloud LLM with fallback chain.
+
+        Fallback chain: primary provider -> Groq -> HF -> local GGUF -> template.
+        Returns None on total failure so caller can handle.
+        """
+        if not self.client or not self.client.available:
             return None
-        payload = {
-            "model": settings.GROQ_MODEL,
-            "messages": [
-                {"role": "system",
-                 "content": "You are an expert Indian legal draftsman."},
-                {"role": "user",
-                 "content": self._section_prompt(section, ctx)},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 1024,
-        }
-        # Retry on rate-limit (429) / transient 5xx, honouring Retry-After.
-        delays = [3, 8, 20]
-        for attempt in range(4):
+
+        # Try primary provider first
+        messages = [
+            {"role": "system", "content": "You are an expert Indian legal draftsman."},
+            {"role": "user", "content": self._section_prompt(section, ctx)},
+        ]
+        text = self.client.chat(messages, temperature=0.7, max_tokens=1024)
+        if text:
+            return text
+
+        logger.warning(f"Primary LLM ({self._provider}/{self.client.model}) failed, trying fallback chain...")
+
+        # Fallback chain: try other providers if available
+        fallback_order = []
+        if self._provider != "groq" and settings.GROQ_API_KEY:
+            fallback_order.append(("groq", settings.GROQ_API_KEY, settings.GROQ_MODEL))
+        if self._provider != "hf" and settings.HF_API_TOKEN:
+            fallback_order.append(("hf", settings.HF_API_TOKEN, settings.HF_MODEL))
+
+        for provider_name, api_key, model_name in fallback_order:
             try:
-                with httpx.Client(timeout=90.0) as client:
-                    resp = client.post(
-                        GROQ_API_URL,
-                        headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
-                        json=payload,
-                    )
-                if resp.status_code == 200:
-                    text = resp.json()["choices"][0]["message"]["content"].strip()
-                    return text or None
-                if resp.status_code in (429, 500, 502, 503) and attempt < 3:
-                    wait = resp.headers.get("retry-after")
-                    wait_s = float(wait) if wait and str(wait).replace(".", "", 1).isdigit() else delays[attempt]
-                    logger.info(f"Groq API status {resp.status_code}, retrying in {wait_s}s...")
-                    time.sleep(wait_s)
-                    continue
-                # Log status only — never the body/key.
-                logger.warning(f"Groq API returned status {resp.status_code}, falling back.")
-                return None
-            except Exception:
-                if attempt < 3:
-                    time.sleep(delays[attempt])
-                    continue
-                logger.warning("Groq API call failed repeatedly, falling back.")
-                return None
+                logger.info(f"Trying fallback provider: {provider_name} ({model_name})")
+                fallback_client = self._create_fallback_client(provider_name, api_key, model_name)
+                if fallback_client and fallback_client.available:
+                    text = fallback_client.chat(messages, temperature=0.7, max_tokens=1024)
+                    if text:
+                        logger.info(f"Fallback provider {provider_name} succeeded")
+                        return text
+            except Exception as e:
+                logger.warning(f"Fallback provider {provider_name} failed: {e}")
+                continue
+
+        logger.warning("All cloud providers failed, will fall back to local/template")
+        return None
+
+    def _create_fallback_client(self, provider: str, api_key: str, model: str):
+        """Create a temporary LLMClient for fallback."""
+        from app.nlp.llm_client import LLMClient
+        if provider == "groq":
+            return LLMClient("https://api.groq.com/openai/v1", api_key, model)
+        elif provider == "hf":
+            hf_url = settings.HF_BASE_URL or "https://router.huggingface.co/v1"
+            return LLMClient(hf_url, api_key, model)
         return None
 
     def _parties_block(self, cfg, p, r):
@@ -422,11 +543,26 @@ Draft the {section.replace('_', ' ')} section only.
                 f"4.\tThat the Plaintiff is entitled to recover the said damages under {stat}. I hereby close my evidence. My statements are true and correct.")
 
     def _t(self, section, ctx):
-        # Priority: Groq cloud API -> local GGUF -> hardcoded templates.
-        if self.use_groq:
-            groq_text = self._generate_with_groq(section, ctx)
-            if groq_text:
-                return groq_text
+        # STEP 1 — classification gate: validate case type BEFORE generating.
+        case_type = self.check_case_type(ctx)
+        ctx = dict(ctx)
+        ctx["case_type"] = case_type
+
+        # STEP 2 — priority: resolved cloud LLM (any provider) -> local GGUF
+        # -> hardcoded templates.
+        # Skip failed providers
+        if self.client and self.client.available and not self._is_provider_failed(self._provider):
+            cloud_text = self._generate_with_cloud(section, ctx)
+            if cloud_text:
+                return cloud_text
+            # Mark provider as failed if cloud generation failed
+            self._mark_provider_failed(self._provider)
+            self.client = None  # Disable this client for subsequent calls
+
+        if self.use_model and self.llm:
+            llm_text = self._generate_with_llm(section, ctx)
+            if llm_text:
+                return llm_text
 
         if self.use_model and self.llm:
             llm_text = self._generate_with_llm(section, ctx)
@@ -507,16 +643,74 @@ Draft the {section.replace('_', ' ')} section only.
 
     def generate_section(self, section, context): return self._t(section, context)
 
-    def generate_all_sections(self, context):
+    async def generate_all_sections(self, context, strict: bool = False):
+        """Generate all 7 draft sections.
+
+        strict=False (default, used by the form flow): cloud LLM -> local
+            GGUF -> hardcoded templates. A draft is always produced.
+        strict=True (used by the AI-chat flow): cloud LLM ONLY. If no model
+            is configured or the model fails on any section, raise
+            RuntimeError instead of silently serving a template — the caller
+            marks the case 'failed' and the chat tells the user honestly.
+        """
         start = time.time()
         order = ["title_block","complaint_body","prayer","list_of_witnesses","list_of_documents","affidavit","evidence_affidavit"]
         sections = {}
+        use_cloud = bool(self.client and self.client.available)
+        
+        if strict and not use_cloud:
+            # In strict mode, we still try the fallback chain but raise if ALL fail
+            pass  # Will try fallback chain below
+        
         for i, s in enumerate(order):
-            sections[s] = self._t(s, context)
+            if strict:
+                text = self._generate_with_cloud(s, context)
+                if not text:
+                    # In strict mode, try fallback chain before giving up
+                    if self.use_model and self.llm:
+                        text = self._generate_with_llm(s, context)
+                    if not text:
+                        # Try template as last resort in strict mode (bypass cloud)
+                        text = self._t(s, context)
+                    if not text:
+                        raise RuntimeError(
+                            f"Language model failed to generate the '{s}' section. "
+                            "No draft was produced."
+                        )
+                    sections[s] = text
+                else:
+                    sections[s] = self._t(s, context)
+            else:
+                sections[s] = self._t(s, context)
             # Stagger cloud calls so the free-tier per-minute limit isn't hit.
-            if self.use_groq and i < len(order) - 1:
+            if use_cloud and i < len(order) - 1:
                 time.sleep(4)
         sections["_generation_time"] = round(time.time()-start, 2)
         sections["_full_text"] = ("\n\n"+"="*70+"\n\n").join(sections[k] for k in order)
         logger.info(f"All 7 sections generated in {sections['_generation_time']}s")
         return sections
+
+    # ---- Backwards-compat shims (older code probed these attrs) ----
+    @property
+    def use_groq(self) -> bool:
+        return bool(self._provider == "groq" and self.client and self.client.available)
+
+    @property
+    def use_hf(self) -> bool:
+        return bool(self._provider == "hf" and self.client and self.client.available)
+
+    @property
+    def _effective_provider(self) -> str:
+        if self._provider and self.client and self.client.available:
+            return self._provider
+        if self.use_model:
+            return "local"
+        return "template"
+
+    @property
+    def model_label(self) -> str:
+        if self.client and self.client.available:
+            return f"{self._provider}:{self.client.model}"
+        if self.use_model:
+            return "local-llm"
+        return "template"

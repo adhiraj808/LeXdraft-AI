@@ -35,6 +35,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # For ML-enabled version: dockerfile: Dockerfile.ml
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
@@ -49,21 +50,42 @@ services:
     volumes:
       - ./backend:/app
       - model_cache:/app/.cache
+    # Production command (comment out for dev)
+    # command: gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:8000
+    # Development command with hot reload
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
+  # Optional: ML-enabled backend (uncomment to use)
+  # backend-ml:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile.ml
+  #   env_file: .env
+  #   environment:
+  #     POSTGRES_HOST: postgres
+  #     REDIS_HOST: redis
+  #   ports:
+  #     - "8001:8000"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   volumes:
+  #     - ./backend:/app
+  #     - model_cache:/app/.cache
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
     ports:
       - "5173:5173"
     depends_on:
       - backend
-    environment:
-      VITE_API_URL: http://localhost:8000
-      VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-
 
 volumes:
   postgres_data:

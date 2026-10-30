@@ -27,6 +27,7 @@ const paths = {
   New: (<><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" /></>),
   Upload: (<><path d="M12 16V3M7 8l5-5 5 5M4 14v7h16v-7" /></>),
   Logout: (<><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></>),
+  HelpCircle: (<><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></>),
 }
 
 export function Icon({ name, size }) {
