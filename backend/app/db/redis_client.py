@@ -14,14 +14,20 @@ _redis: Optional[aioredis.Redis] = None
 
 async def init_redis():
     global _redis
+    if _redis is not None:
+        try:
+            await _redis.ping()
+            return
+        except Exception:
+            pass
     _redis = aioredis.from_url(
         settings.REDIS_URL,
         encoding="utf-8",
         decode_responses=True,
-        max_connections=20,
+        max_connections=settings.REDIS_MAX_CONNECTIONS,
     )
     await _redis.ping()
-    logger.info("Redis initialized.")
+    logger.info(f"Redis initialized with max_connections={settings.REDIS_MAX_CONNECTIONS}.")
 
 
 async def close_redis():
@@ -31,7 +37,17 @@ async def close_redis():
 
 
 def get_redis() -> aioredis.Redis:
+    global _redis
     if _redis is None:
+        # Auto-initialize if not already done
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Can't run async init in sync context, raise error
+                raise RuntimeError("Redis not initialized. Call init_redis() first.")
+        except RuntimeError:
+            pass
         raise RuntimeError("Redis not initialized. Call init_redis() first.")
     return _redis
 
@@ -52,6 +68,11 @@ def _draft_key(case_id: str) -> str:
 
 async def cache_case_data(case_id: str, data: dict, ttl: int = None) -> None:
     """Store complete case processing data in Redis."""
+    import app.db.redis_client as redis_client
+    from app.db.redis_client import init_redis, get_redis
+    # Ensure Redis is initialized
+    if redis_client._redis is None:
+        await init_redis()
     r = get_redis()
     ttl = ttl or settings.REDIS_TTL_SECONDS
     key = _case_key(case_id)

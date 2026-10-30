@@ -4,17 +4,23 @@ FastAPI Application Entry Point
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import logging
+import asyncio
+import uuid
 
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.rate_limit import limiter, public_limiter
 from app.db.postgres import init_db
 from app.db.redis_client import init_redis
 from app.nlp.pipeline import NLPPipeline
-from app.api.routes import admin, auth, cases, health, rag
+from app.api.routes import admin, auth, cases, health, rag, fir_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +43,28 @@ async def lifespan(app: FastAPI):
         )
 
     # Initialize database
+    logger.info("About to init_db...")
     await init_db()
     logger.info("PostgreSQL connected.")
 
     # Initialize Redis
-    await init_redis()
-    logger.info("Redis connected.")
+    logger.info("Initializing Redis...")
+    try:
+        await init_redis()
+        logger.info("Redis connected.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis: {e}")
+        raise
 
-    # Load NLP models (this may take 30-60s on first run)
-    logger.info("Loading NLP models...")
+    # Load NLP models in background (don't block startup)
+    logger.info("Starting NLP model loading in background...")
     nlp_pipeline = NLPPipeline()
-    await nlp_pipeline.load()
+    # Start loading in background, don't block startup
+    asyncio.create_task(nlp_pipeline.load())
     app.state.nlp_pipeline = nlp_pipeline
-    logger.info("NLP pipeline ready.")
+    logger.info("NLP pipeline loading started in background.")
+    
+    logger.info("Lifespan startup complete, yielding...")
 
     yield
 
@@ -69,6 +84,39 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Security middleware
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["localhost", "127.0.0.1", "0.0.0.0"]
+    )
+
+    # Request size limit middleware
+    @app.middleware("http")
+    async def limit_request_size(request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 1_048_576:  # 1MB limit
+            return Response("Payload too large", status_code=413)
+        return await call_next(request)
+
+    # Request ID middleware for tracing
+    @app.middleware("http")
+    async def add_request_id(request: Request, call_next):
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    # Rate limiter
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # Add rate limiter middleware
+    from slowapi.middleware import SlowAPIMiddleware
+    app.add_middleware(SlowAPIMiddleware)
+
+    # Public rate limiter for public endpoints
+    app.state.public_limiter = public_limiter
+
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
@@ -84,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(cases.router, prefix="/api/v1/cases", tags=["cases"])
     app.include_router(rag.router, prefix="/api/v1/rag", tags=["rag"])
     app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
+    app.include_router(fir_analysis.router, prefix="/api/v1", tags=["fir-analysis"])
 
     return app
 
