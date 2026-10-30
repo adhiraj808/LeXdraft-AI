@@ -51,7 +51,11 @@ def extract_case_fields(prompt: str) -> Optional[Dict]:
                     json=payload,
                 )
             if resp.status_code == 200:
-                text = resp.json()["choices"][0]["message"]["content"].strip()
+                msg = resp.json()["choices"][0]["message"]
+                # Handle gpt-oss-120b which may return content in "reasoning" field
+                text = msg.get("content", "").strip()
+                if not text:
+                    text = msg.get("reasoning", "").strip()
                 # Strip markdown fences (```json ... ```) if present.
                 text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
                 text = re.sub(r"\s*```$", "", text)
@@ -74,8 +78,13 @@ def extract_case_fields(prompt: str) -> Optional[Dict]:
                 logger.warning("Groq extraction returned unparseable JSON, falling back.")
                 return None
             if resp.status_code in (429, 500, 502, 503) and attempt < 3:
+                # On 429 (rate limit), fail fast since daily limit won't recover quickly
+                if resp.status_code == 429:
+                    logger.warning("Groq extraction rate limited, failing fast")
+                    return None
                 wait = resp.headers.get("retry-after")
                 wait_s = float(wait) if wait and str(wait).replace(".", "", 1).isdigit() else delays[attempt]
+                wait_s = min(wait_s, 30.0)
                 logger.info(f"Groq extraction status {resp.status_code}, retrying in {wait_s}s...")
                 time.sleep(wait_s)
                 continue

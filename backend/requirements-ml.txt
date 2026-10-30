@@ -1,0 +1,18 @@
+# ML/AI dependencies - heavy, optional
+# Install with: pip install -r requirements-ml.txt
+# These are not needed for basic template-based draft generation
+
+# ML/AI full stack
+torch>=2.3.0
+transformers>=4.41.1
+tokenizers>=0.19.1
+sentencepiece>=0.2.0
+accelerate>=0.30.0
+huggingface-hub>=0.23.2
+sentence-transformers>=3.0.1
+chromadb>=0.5.23
+llama-cpp-python>=0.2.76
+
+# Training (host-side dataset + fine-tune; not needed at runtime)
+pandas>=2.0
+scikit-learn>=1.3

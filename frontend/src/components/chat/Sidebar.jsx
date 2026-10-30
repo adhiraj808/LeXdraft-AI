@@ -1,11 +1,12 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
+import { casesAPI } from '../../services/api'
 import { Icon } from './Icons'
 
 const navItems = [
   { icon: 'Folder', label: 'My Cases', href: '/cases' },
   { icon: 'New', label: 'New Case (Form)', href: '/cases/new' },
-  //   { icon: 'Sparkles', label: 'AI Chat', href: '/cases/aichat' },
+  { icon: 'HelpCircle', label: 'Legal Assistant', href: '/legal-assistant' },
 ]
 
 export function timeAgo(iso) {
@@ -21,7 +22,7 @@ export function timeAgo(iso) {
   return new Date(iso).toLocaleDateString()
 }
 
-export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat }) {
+export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat, onSelectRecent }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuth()
@@ -91,8 +92,11 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat }) {
               type="button"
               title={c.title}
               onClick={() => {
-                navigate('/cases/' + c.id)
-                if (onClose && typeof window !== 'undefined' && window.innerWidth < 900) onClose()
+                if (onSelectRecent) onSelectRecent(c.id)
+                else {
+                  navigate('/cases/' + c.id)
+                  if (onClose && typeof window !== 'undefined' && window.innerWidth < 900) onClose()
+                }
               }}
             >
               <span>{c.title}</span>
@@ -100,6 +104,7 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat }) {
             </button>
           ))
         )}
+
       </section>
 
       <div className="chat-sidebar-footer">

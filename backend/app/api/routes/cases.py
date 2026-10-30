@@ -15,6 +15,9 @@ from app.utils.pdf_generator import generate_pdf_bytes
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Rate limiter (shared instance from core)
+from app.core.rate_limit import limiter
+
 
 def get_nlp(request: Request):
     return request.app.state.nlp_pipeline
@@ -43,16 +46,17 @@ async def submit_case(
 
 @router.post("/prompt", status_code=202)
 async def submit_case_prompt(
+    request: Request,
     payload: PromptSubmit,
     background_tasks: BackgroundTasks,
-    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     service = CaseService(db)
     case = await service.create_case_from_prompt(payload.prompt, current_user)
     nlp = get_nlp(request)
-    background_tasks.add_task(_process_case_background, case.id, nlp)
+    # AI-chat flow is strict: never serve a template as an "AI draft".
+    background_tasks.add_task(_process_case_background, case.id, nlp, True)
     return {
         "id": case.id,
         "title": case.title,
@@ -62,12 +66,14 @@ async def submit_case_prompt(
     }
 
 
-async def _process_case_background(case_id: str, nlp_pipeline):
+async def _process_case_background(case_id: str, nlp_pipeline, strict: bool = False):
     from app.db.postgres import AsyncSessionLocal
+    from app.db.redis_client import init_redis
+    await init_redis()  # Ensure Redis is initialized in background task
     async with AsyncSessionLocal() as db:
         try:
             service = CaseService(db)
-            await service.process_case(case_id, nlp_pipeline)
+            await service.process_case(case_id, nlp_pipeline, strict=strict)
         except Exception as e:
             logger.error(f"Background processing failed for case {case_id}: {e}")
 

@@ -26,6 +26,24 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-20b"
 
+    # Hugging Face Inference API (optional). Alternative cloud LLM provider.
+    # NOTE: .env historically used HUGGINGFACE_TOKEN — both names are accepted.
+    HF_API_TOKEN: str = ""
+    HUGGINGFACE_TOKEN: str = ""
+    HF_MODEL: str = "zai-org/GLM-5.3"
+    HF_BASE_URL: str = "https://router.huggingface.co/v1"
+
+    # Universal OpenAI-compatible endpoint — works with ANY provider
+    # (Groq, HF, OpenRouter, Together, vLLM, Ollama, llama.cpp server...).
+    LLM_BASE_URL: str = ""
+    LLM_API_KEY: str = ""
+    LLM_MODEL: str = ""
+
+    # Which provider to use: auto | hf | groq | openai | local | template.
+    # "auto" picks the first configured cloud provider, then falls back to
+    # local GGUF, then to hardcoded templates.
+    MODEL_PROVIDER: str = "auto"
+
     # PostgreSQL
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
@@ -68,10 +86,24 @@ class Settings(BaseSettings):
     # never be used directly for predictions (see CaseClassifier.load()).
     CLASSIFIER_MODEL_PATH: str = ".cache/models/classifier_model"
     HF_MODEL_GENERATOR: str = "google/flan-t5-base"
-    GGUF_MODEL_PATH: str = ".cache/models/llama-3.2-1b-instruct.Q4_K_M.gguf"
+    GGUF_MODEL_PATH: str = ".cache/models/llama-3.2-1b-instruct.Q3_K_M.gguf"
     SPACY_MODEL: str = "en_core_web_sm"
     USE_GPU: bool = False
     MODEL_CACHE_DIR: str = ".cache/models"
+    
+    # Memory Optimization Settings
+    ENABLE_LOCAL_LLM: bool = True
+    GGUF_QUANTIZATION: str = "Q3_K_M"  # Q4_K_M, Q3_K_M, Q2_K
+    GGUF_CONTEXT_WINDOW: int = 2048
+    GGUF_GPU_LAYERS: int = 0  # 0 = CPU only
+    
+    # Connection Pool Settings
+    REDIS_MAX_CONNECTIONS: int = 5
+    POSTGRES_POOL_SIZE: int = 5
+    POSTGRES_MAX_OVERFLOW: int = 5
+    
+    # Concurrency Control
+    MAX_CONCURRENT_DRAFTS: int = 2
 
     # CORS
     ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
