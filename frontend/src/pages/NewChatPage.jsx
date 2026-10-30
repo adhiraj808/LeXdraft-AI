@@ -11,6 +11,7 @@ import {
 } from '../components/chat/Conversation'
 import { Composer } from '../components/chat/Composer'
 import { ContextPanel, ContextToggle } from '../components/chat/ContextPanel'
+import { ModelSelector } from '../components/chat/ModelSelector'
 import { Icon } from '../components/chat/Icons'
 
 function now() {
@@ -45,9 +46,16 @@ export default function NewChatPage() {
   const [backendUp, setBackendUp] = useState(null)
   const [pollRound, setPollRound] = useState(0)
   const [recents, setRecents] = useState([])
+  const [primaryModel, setPrimaryModel] = useState('groq')
+  const [fallbackModel, setFallbackModel] = useState('template')
   const recognitionRef = useRef(null)
   const pollRef = useRef(null)
   const bottomRef = useRef(null)
+
+  const handleModelsChange = ({ primary, fallback }) => {
+    setPrimaryModel(primary)
+    setFallbackModel(fallback)
+  }
 
   useEffect(() => {
     return () => {
@@ -294,6 +302,11 @@ export default function NewChatPage() {
             </div>
           </div>
           <div className="top-actions">
+            <ModelSelector
+              onModelsChange={handleModelsChange}
+              initialPrimary={primaryModel}
+              initialFallback={fallbackModel}
+            />
             <ContextToggle onOpen={() => setContextOpen(true)} />
           </div>
 
