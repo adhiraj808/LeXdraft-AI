@@ -2691,6 +2691,7 @@ html.dark .detail-card-bg-icon {
 }
 
 .chat-sidebar .chat-brand-name {
+  font-family: 'Cormorant Garamond', serif;
   font-size: 15px;
   letter-spacing: 0.12em;
   font-weight: 700;
@@ -3078,6 +3079,29 @@ html.dark .detail-card-bg-icon {
   max-width: 46rem;
   margin: 0 0 2rem;
   width: 100%;
+}
+
+/* User messages: right-aligned (avatar on right, bubble on left) */
+.chat-conversation .user-message {
+  direction: rtl;
+  justify-content: end;
+}
+
+.chat-conversation .user-message .message-avatar {
+  order: 2;
+}
+
+.chat-conversation .user-message .message-body {
+  order: 1;
+  direction: ltr;
+  margin-right: 0;
+  margin-left: auto;
+}
+
+/* Assistant messages: left-aligned (default) */
+.chat-conversation .assistant-message {
+  direction: ltr;
+  justify-content: start;
 }
 
 .chat-conversation .message-avatar {
