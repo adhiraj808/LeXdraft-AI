@@ -76,6 +76,17 @@ export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat, onSel
             <span>{item.label}</span>
           </Link>
         ))}
+        {/* Admin link - only visible to admin users */}
+        {user && user.role === 'admin' && (
+          <Link
+            className={'chat-nav-item' + (location.pathname === '/admin' ? ' active' : '')}
+            to="/admin"
+            onClick={(e) => { e.preventDefault(); go('/admin') }}
+          >
+            <Icon name="Settings" size={16} />
+            <span>Admin Panel</span>
+          </Link>
+        )}
       </nav>
 
       <section className="chat-history">

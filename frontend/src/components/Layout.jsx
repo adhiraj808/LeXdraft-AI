@@ -8,7 +8,6 @@ const NAV = [
   { to: '/cases/new', label: 'New Draft' },
   { to: '/cases/aichat', label: 'AI Chat' },
   { to: '/cases', label: 'My Cases' },
-  { to: '/admin', label: 'Admin' },
 ]
 
 export default function Layout({ children }) {
@@ -16,6 +15,9 @@ export default function Layout({ children }) {
   const { isDark, toggleTheme } = useTheme()
   const location = useLocation()
   const navigate = useNavigate()
+
+  // Admin nav item only for admin users
+  const adminNav = user && user.role === 'admin' ? { to: '/admin', label: 'Admin' } : null
 
   return (
     <div className="app-shell">
@@ -49,6 +51,15 @@ export default function Layout({ children }) {
                 </Link>
               )
             })}
+            {adminNav && (
+              <Link
+                key={adminNav.to}
+                to={adminNav.to}
+                className={`nav-link ${location.pathname === adminNav.to ? 'active' : ''}`}
+              >
+                {adminNav.label}
+              </Link>
+            )}
           </nav>
 
           <div className="header-actions">
