@@ -20,32 +20,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python build dependencies and compile wheels
 COPY requirements-base.txt requirements-ml.txt ./
-RUN pip install --no-cache-dir --upgrade pip wheel setuptools && \
-    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements-base.txt -r requirements-ml.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip wheel setuptools && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements-base.txt -r requirements-ml.txt
 
 # ---- Stage 2: Runtime with ML ----
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Install runtime system dependencies
+# Install runtime system dependencies (libpq5 not needed: psycopg2-binary bundles it)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-compiled wheels from builder
-COPY --from=builder /wheels /wheels
+# Pre-installed venv from the builder stage (see backend/Dockerfile).
+COPY --from=builder /opt/venv /opt/venv
 
-# Install Python packages from pre-compiled wheels.
-# gunicorn is installed explicitly (see backend/Dockerfile): the production CMD
-# needs it, but requirements.txt does not pin it.
-COPY requirements-base.txt requirements-ml.txt ./
-RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements-base.txt -r requirements-ml.txt && \
-    pip install --no-cache-dir "gunicorn>=22.0" && \
-    rm -rf /wheels
-
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    VIRTUAL_ENV=/opt/venv
 
 # Download spaCy model
 RUN python -m spacy download en_core_web_sm
@@ -53,9 +48,10 @@ RUN python -m spacy download en_core_web_sm
 # Copy application code (alembic.ini lives here; init_db needs it)
 COPY . .
 
-# Create non-root user
-RUN useradd --create-home --uid 1000 appuser && \
-    chown -R appuser:appuser /app
+# Create non-root user (and a writable model cache, see backend/Dockerfile)
+RUN mkdir -p /app/.cache && \
+    useradd --create-home --uid 1000 appuser && \
+    chown -R appuser:appuser /app/.cache
 USER appuser
 
 EXPOSE 8000

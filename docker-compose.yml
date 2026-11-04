@@ -9,9 +9,13 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      # Docker Postgres is also usable from pgAdmin (Host: localhost, Port: 5432).
-      # It is local-dev only: never expose 5432 on a public host.
-      - "5432:5432"
+      # pgAdmin convenience. Localhost-bound only: the database must never be
+      # reachable from the network in this compose file (no external publish).
+      - "127.0.0.1:5432:5432"
+    # Low-memory dev tuning (a stock Postgres is also fine; these just stop it
+    # from grabbing most of the host's RAM on a small machine).
+    command: postgres -c shared_buffers=128MB -c max_connections=50 -c work_mem=4MB -c maintenance_work_mem=32MB
+    mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-legaluser} -d ${POSTGRES_DB:-legal_draft_db}"]
       interval: 10s
@@ -22,11 +26,14 @@ services:
     image: redis:7-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    # Cache only (Postgres is the source of truth), so no persistence is needed:
+    # --save "" disables snapshotting and saves the RAM/disk they consume.
+    command: redis-server --save "" --appendonly no --maxmemory 64mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     ports:
       - "127.0.0.1:6379:6379"
+    mem_limit: 128m
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
       interval: 10s
@@ -42,6 +49,9 @@ services:
     environment:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
+      # SlowAPI reads the real client IP from X-Forwarded-For when it comes via
+      # nginx. Without this every user shares one rate-limit bucket (nginx's IP).
+      FORWARDED_ALLOW_IPS: "127.0.0.1"
     ports:
       - "8000:8000"
     depends_on:
@@ -52,10 +62,13 @@ services:
     volumes:
       - ./backend:/app
       - model_cache:/app/.cache
+    # spaCy + a cloud-LLM draft needs roughly 300-400 MB. The ML image (RAG,
+    # embeddings) needs materially more - use Dockerfile.ml for that.
+    mem_limit: 1g
     # Development command with hot reload
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     # Production command (uncomment, and comment out --reload above):
-    # command: gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:8000
+    # command: gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 
   # Optional: ML-enabled backend (uncomment to use)
   # backend-ml:
@@ -82,10 +95,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: http://localhost:8000
-        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+        # Empty = same-origin: the browser calls /api/v1 on the frontend's own
+        # host and nginx proxies it to the backend. This is what you want in
+        # production (no CORS, no baked-in host). Set it only for a split deploy.
+        VITE_API_URL: ""
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     ports:
       - "5173:5173"
+    mem_limit: 64m
     depends_on:
       - backend
 

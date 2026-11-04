@@ -54,7 +54,7 @@ def mock_user():
 
 
 @pytest.fixture
-async def client(db_session, mock_user):
+async def client(test_engine, db_session, mock_user):
     from main import app
     from app.db import redis_client
 
@@ -77,22 +77,32 @@ async def client(db_session, mock_user):
     mock_redis.publish = AsyncMock(return_value=None)
     redis_client._redis = mock_redis
 
-    # Mock NLP pipeline
-    mock_pipeline = MagicMock()
-    mock_pipeline._loaded = True
-    mock_pipeline.process = AsyncMock(return_value={
+    # Mock NLP pipeline (generator.model_label must be a plain string: process_case
+    # stores it in the Draft.model_used column)
+    mock_nlp_pipeline = MagicMock()
+    mock_nlp_pipeline._loaded = True
+    mock_nlp_pipeline.generator.model_label = "test-mock"
+    mock_nlp_pipeline.process = AsyncMock(return_value={
         "preprocessed": {"cleaned": "test", "sentences": [], "tokens": [], "legal_sections": [], "word_count": 5, "sentence_count": 1},
         "entities": {"persons": [], "organizations": [], "dates": [], "statutes": [], "courts": [], "locations": [], "money": []},
         "classification": {"case_type": "Criminal", "confidence": 0.9, "probabilities": {}, "method": "keyword"},
         "context": {},
-        "draft_sections": {"title_block": "TITLE", "facts": "FACTS", "grounds": "GROUNDS", "prayer": "PRAYER", "verification": "VER", "_generation_time": 1.0, "_full_text": "FULL"},
+        "draft_sections": {"title_block": "TITLE", "complaint_body": "BODY", "prayer": "PRAYER", "list_of_witnesses": "W", "list_of_documents": "D", "affidavit": "A", "evidence_affidavit": "E", "_generation_time": 1.0, "_full_text": "FULL"},
     })
-    app.state.nlp_pipeline = mock_pipeline
+    app.state.nlp_pipeline = mock_nlp_pipeline
 
+    # Make background draft tasks share the test database instead of the real one.
+    import app.db.postgres as postgres_module
+    _real_session_factory = postgres_module.AsyncSessionLocal
+    postgres_module.AsyncSessionLocal = async_sessionmaker(
+        test_engine, class_=AsyncSession, expire_on_commit=False
+    )
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: mock_user
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    # "localhost" is whitelisted by HostGuardMiddleware (see ALLOWED_HOSTS).
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as ac:
         yield ac
 
+    postgres_module.AsyncSessionLocal = _real_session_factory
     app.dependency_overrides.clear()

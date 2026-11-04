@@ -1,0 +1,6 @@
+# Optional local LLM (llama-cpp-python) — only needed if you enable
+# ENABLE_LOCAL_LLM=true in .env (local GGUF generation instead of a cloud LLM).
+# ~1 GB RAM once loaded, and a slow C++ build on first install.
+# Install with:  pip install -r requirements.txt -r requirements-local-llm.txt
+
+llama-cpp-python>=0.2.76

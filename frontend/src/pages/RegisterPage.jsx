@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
 import toast from 'react-hot-toast'
+import { getErrorMessage } from '../services/api'
 import { Sun, Moon, Scale, Mail, Lock, User, UserPlus, ArrowRight, CheckCircle2, FileCheck } from 'lucide-react'
 import GoogleSignInButton from '../components/GoogleSignInButton'
 
@@ -22,7 +23,7 @@ export default function RegisterPage() {
       toast.success('Account Activated. Please Sign In.', { id: loadToast })
       navigate('/login')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Registration failed', { id: loadToast })
+      toast.error(getErrorMessage(err, 'Registration failed'), { id: loadToast })
     } finally {
       setLoading(false)
     }

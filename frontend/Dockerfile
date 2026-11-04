@@ -31,19 +31,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Copy built assets from builder
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Add cache headers for static assets
-RUN echo '# Cache static assets for 1 year\n\
-location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {\n\
-    expires 1y;\n\
-    add_header Cache-Control "public, immutable";\n\
-}\n\
-\n# Compress responses\n\
-gzip on;\n\
-gzip_vary on;\n\
-gzip_min_length 1024;\n\
-gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml application/json;\n\
-gzip_disable "MSIE [1-6]\\.";\n' > /etc/nginx/conf.d/cache.conf
-
 EXPOSE 5173
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://localhost:5173/ >/dev/null || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

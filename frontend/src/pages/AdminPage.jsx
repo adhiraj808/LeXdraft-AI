@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import Layout from '../components/Layout'
 import StatusBadge from '../components/StatusBadge'
-import { adminAPI } from '../services/api'
+import { adminAPI, getErrorMessage } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import { 
   Users, 
@@ -97,7 +97,7 @@ export default function AdminPage() {
       toast.success('User deleted')
       fetchAll()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Delete failed')
+      toast.error(getErrorMessage(err, 'Delete failed'))
     }
   }
 
@@ -107,7 +107,7 @@ export default function AdminPage() {
       toast.success(`${username} is now ${role}`)
       fetchAll()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Role change failed')
+      toast.error(getErrorMessage(err, 'Role change failed'))
     }
   }
 
@@ -142,7 +142,7 @@ export default function AdminPage() {
       setNewModel({ id: '', label: '', provider: '' })
       toast.success('Model added')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to add model')
+      toast.error(getErrorMessage(err, 'Failed to add model'))
     }
   }
 

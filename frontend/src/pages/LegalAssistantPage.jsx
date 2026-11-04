@@ -126,9 +126,9 @@ export default function LegalAssistantPage() {
         model: primaryModel,
         fallback_model: fallbackModel
       })
-      setAnswer(res)
+      setAnswer(res.data)
       // Add to history
-      setHistory(prev => [{ id: Date.now(), question: text, answer: res, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...prev].slice(0, 10))
+      setHistory(prev => [{ id: Date.now(), question: text, answer: res.data, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...prev].slice(0, 10))
       toast.success('Answer received')
     } catch (err) {
       const msg = describeError(err, 'Failed to get answer. Please try again.')

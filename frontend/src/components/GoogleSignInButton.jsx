@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { getErrorMessage } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
@@ -44,7 +45,7 @@ export default function GoogleSignInButton() {
             toast.success('Welcome back, Counselor', { id: loadToast })
             navigate('/dashboard')
           } catch (err) {
-            toast.error(err.response?.data?.detail || 'Google sign-in failed', { id: loadToast })
+            toast.error(getErrorMessage(err, 'Google sign-in failed'), { id: loadToast })
           }
         },
       })

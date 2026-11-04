@@ -40,9 +40,12 @@ jobs:
       POSTGRES_PASSWORD: testpass
       REDIS_HOST: localhost
       REDIS_PASSWORD: testpass
-      SECRET_KEY: test-secret-key-for-ci
+      # Must satisfy assert_secure_for_runtime() (>= 32 chars when DEBUG=false).
+      SECRET_KEY: test-secret-key-for-ci-0123456789abcdef
       GROQ_API_KEY: dummy
       GROQ_MODEL: openai/gpt-oss-20b
+      # Local development runs in DEBUG=true.
+      DEBUG: "true"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -53,7 +56,8 @@ jobs:
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
+          python -m spacy download en_core_web_sm
       - name: Wait for services
         run: |
           sleep 10
