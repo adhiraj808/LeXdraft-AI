@@ -1,18 +1,29 @@
-import logging, time, datetime, os, asyncio
-from typing import Dict, Optional
-import httpx
+import asyncio
+import datetime
+import importlib.util
+import logging
+import os
+import threading
+import time
+from typing import Dict, List, Optional, Tuple
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Order in which the 7 sections are generated, stored and exported.
+SECTION_ORDER = [
+    "title_block",
+    "complaint_body",
+    "prayer",
+    "list_of_witnesses",
+    "list_of_documents",
+    "affidavit",
+    "evidence_affidavit",
+]
 
-try:
-    from llama_cpp import Llama
-    LLAMA_AVAILABLE = True
-except ImportError:
-    LLAMA_AVAILABLE = False
-    logger.warning("llama-cpp-python not installed. GGUF model will not be used.")
+# (section text, source label such as "groq:openai/gpt-oss-20b", "local-llm" or "template")
+SectionResult = Tuple[str, str]
 
 
 # Per-case-type pleading configuration used by the template fallback (when no
@@ -22,32 +33,44 @@ except ImportError:
 # the classifier actually determined the case to be.
 CASE_TYPE_CONFIG = {
     "Criminal": {
-        "p_label": "Complainant", "r_label": "Accused", "case_no_label": "C.C. NO.",
+        "p_label": "Complainant",
+        "r_label": "Accused",
+        "case_no_label": "C.C. NO.",
         "show_ps": True,
         "doc_title": "COMPLAINT ON BEHALF OF COMPLAINANT U/S {stat}",
     },
     "Civil": {
-        "p_label": "Plaintiff", "r_label": "Defendant", "case_no_label": "C.S. NO.",
+        "p_label": "Plaintiff",
+        "r_label": "Defendant",
+        "case_no_label": "C.S. NO.",
         "show_ps": False,
         "doc_title": "CIVIL SUIT FOR RECOVERY OF {amt} AND DAMAGES U/S {stat}",
     },
     "Family Law": {
-        "p_label": "Petitioner", "r_label": "Respondent", "case_no_label": "H.M.A. PETITION NO.",
+        "p_label": "Petitioner",
+        "r_label": "Respondent",
+        "case_no_label": "H.M.A. PETITION NO.",
         "show_ps": False,
         "doc_title": "PETITION U/S {stat}",
     },
     "Labour / Employment": {
-        "p_label": "Workman", "r_label": "Management", "case_no_label": "I.D. CASE NO.",
+        "p_label": "Workman",
+        "r_label": "Management",
+        "case_no_label": "I.D. CASE NO.",
         "show_ps": False,
         "doc_title": "PETITION FOR REINSTATEMENT AND BACK WAGES U/S {stat}",
     },
     "Constitutional": {
-        "p_label": "Petitioner", "r_label": "Respondent", "case_no_label": "W.P. NO.",
+        "p_label": "Petitioner",
+        "r_label": "Respondent",
+        "case_no_label": "W.P. NO.",
         "show_ps": False,
         "doc_title": "WRIT PETITION UNDER {stat}",
     },
     "Property Dispute": {
-        "p_label": "Plaintiff", "r_label": "Defendant", "case_no_label": "C.S. NO.",
+        "p_label": "Plaintiff",
+        "r_label": "Defendant",
+        "case_no_label": "C.S. NO.",
         "show_ps": False,
         "doc_title": "SUIT FOR POSSESSION AND PERMANENT INJUNCTION U/S {stat}",
     },
@@ -106,45 +129,63 @@ class LegalDraftGenerator:
     }
 
     def __init__(self):
-        self.use_model = False
+        self.use_model = False  # True once the local GGUF model has been loaded
         self.llm = None
-        self._llm_loaded = False  # Track if GGUF has been loaded
+        self._llm_lock = (
+            threading.Lock()
+        )  # serialises GGUF loading and inference (not thread-safe)
+        self._llm_load_failed = False
         from app.nlp.llm_client import build_default_clients, resolve_provider
 
         self._clients = build_default_clients()
         self._provider = resolve_provider(self._clients)
         self.client = self._clients.get(self._provider) if self._provider else None
-        self._failed_providers = set()  # Track failed providers
-        self._provider_lock = asyncio.Lock()  # Lock for provider fallback race condition
+        # Circuit breaker: provider name -> time.monotonic() until which it is skipped.
+        self._cooldown_until: Dict[str, float] = {}
 
     def _mark_provider_failed(self, provider: str):
-        """Mark a provider as failed to skip it for subsequent generations."""
-        self._failed_providers.add(provider)
-        logger.warning(f"Marking provider '{provider}' as failed, will skip for subsequent generations")
+        """Skip a provider for LLM_FAILURE_COOLDOWN_SECONDS after a failed call.
+
+        A temporary pause (not a permanent ban): one rate-limit or timeout must not turn
+        the LLM off for every later draft until the server restarts.
+        """
+        cooldown = settings.LLM_FAILURE_COOLDOWN_SECONDS
+        self._cooldown_until[provider] = time.monotonic() + cooldown
+        logger.warning(
+            f"LLM provider '{provider}' failed; skipping it for {cooldown:.0f}s."
+        )
 
     def _is_provider_failed(self, provider: str) -> bool:
-        """Check if a provider has been marked as failed."""
-        return provider in self._failed_providers
+        """True while the provider is in its post-failure cooldown."""
+        return time.monotonic() < self._cooldown_until.get(provider, 0.0)
 
     async def load(self):
         if self.client and self.client.available:
-            logger.info(f"Cloud LLM ready via '{self._provider}' (model={self.client.model}).")
-        # Check if local LLM is enabled
+            logger.info(
+                f"Cloud LLM ready via '{self._provider}' (model={self.client.model})."
+            )
+        else:
+            logger.info(
+                "No cloud LLM configured: drafts use the local model (if enabled) or templates."
+            )
+
         if not settings.ENABLE_LOCAL_LLM:
-            logger.info("Local LLM disabled via ENABLE_LOCAL_LLM setting.")
+            logger.info("Local GGUF model disabled (ENABLE_LOCAL_LLM=false).")
             return
-        if not LLAMA_AVAILABLE:
-            logger.error("Cannot load GGUF model: llama-cpp-python not available.")
+        if importlib.util.find_spec("llama_cpp") is None:
+            logger.warning(
+                "ENABLE_LOCAL_LLM=true but llama-cpp-python is not installed "
+                "(pip install -r requirements-local-llm.txt)."
+            )
             return
 
-        model_path = settings.GGUF_MODEL_PATH
+        model_path = settings.resolve_backend_path(settings.GGUF_MODEL_PATH)
         if not os.path.exists(model_path):
-            logger.error(f"GGUF model not found at {model_path}. Please run download script.")
+            logger.warning(f"GGUF model not found at {model_path}.")
             return
 
-        # Lazy loading: only load if actually needed (when cloud providers fail)
-        # We'll mark it as available but defer actual loading until first use
-        logger.info(f"GGUF model available at {model_path} (lazy loading enabled).")
+        # Loading ~1 GB into RAM is deferred until a draft actually needs it.
+        logger.info(f"GGUF model found at {model_path} (loaded lazily on first use).")
 
     def check_case_type(self, ctx: Dict) -> str:
         """Classification gate — validate the case type BEFORE generating.
@@ -158,86 +199,83 @@ class LegalDraftGenerator:
         if not case_type:
             logger.warning("No case_type in context — defaulting to 'Civil'.")
             return DEFAULT_CASE_TYPE if DEFAULT_CASE_TYPE != "auto" else "Civil"
-        if case_type not in CASE_TYPE_CONFIG and case_type not in self.CASE_TYPE_INSTRUCTIONS:
+        if (
+            case_type not in CASE_TYPE_CONFIG
+            and case_type not in self.CASE_TYPE_INSTRUCTIONS
+        ):
             logger.warning(f"Unknown case_type '{case_type}' — defaulting to 'Civil'.")
             return "Civil"
         return case_type
 
-    async def _ensure_gguf_loaded(self):
-        """Lazy load the GGUF model on first use."""
-        if self._llm_loaded:
+    def _ensure_local_llm(self) -> bool:
+        """Load the local GGUF model on first use. Blocking: call from a worker thread."""
+        if self.llm is not None:
             return True
-        if not settings.ENABLE_LOCAL_LLM:
-            logger.info("Local LLM disabled via ENABLE_LOCAL_LLM setting.")
-            return False
-        if not LLAMA_AVAILABLE:
-            logger.error("Cannot load GGUF model: llama-cpp-python not available.")
+        if not settings.ENABLE_LOCAL_LLM or self._llm_load_failed:
             return False
 
-        model_path = settings.GGUF_MODEL_PATH
-        if not os.path.exists(model_path):
-            logger.error(f"GGUF model not found at {model_path}. Please run download script.")
-            return False
+        with self._llm_lock:
+            if self.llm is not None:
+                return True
+            if self._llm_load_failed:
+                return False
+            try:
+                from llama_cpp import Llama
+            except ImportError:
+                logger.warning(
+                    "llama-cpp-python is not installed; local model disabled."
+                )
+                self._llm_load_failed = True
+                return False
 
+            model_path = settings.resolve_backend_path(settings.GGUF_MODEL_PATH)
+            if not os.path.exists(model_path):
+                logger.warning(
+                    f"GGUF model not found at {model_path}; local model disabled."
+                )
+                self._llm_load_failed = True
+                return False
+
+            try:
+                logger.info(f"Loading GGUF model from {model_path}...")
+                self.llm = Llama(
+                    model_path=model_path,
+                    n_ctx=settings.GGUF_CONTEXT_WINDOW,
+                    # Physical cores, not hyper-threads: more threads only add contention.
+                    n_threads=max(1, (os.cpu_count() or 2) // 2),
+                    n_gpu_layers=settings.GGUF_GPU_LAYERS,
+                    verbose=False,
+                )  # the file is memory-mapped by default, so the OS can page it out under pressure
+                self.use_model = True
+                logger.info(
+                    f"GGUF model loaded (n_ctx={settings.GGUF_CONTEXT_WINDOW}, "
+                    f"n_gpu_layers={settings.GGUF_GPU_LAYERS})."
+                )
+                return True
+            except Exception as e:
+                logger.error(f"Failed to load GGUF model: {e}")
+                self._llm_load_failed = True
+                return False
+
+    def _generate_with_llm(self, section: str, ctx: Dict) -> Optional[str]:
+        """Draft one section with the local GGUF model (same prompt as the cloud path)."""
+        messages = [
+            {"role": "system", "content": "You are an expert Indian legal draftsman."},
+            {"role": "user", "content": self._section_prompt(section, ctx)},
+        ]
         try:
-            logger.info(f"Lazy loading GGUF model from {model_path}...")
-            # Use config settings for GPU layers, context window
-            self.llm = Llama(
-                model_path=model_path,
-                n_ctx=settings.GGUF_CONTEXT_WINDOW,
-                n_threads=os.cpu_count(),
-                n_gpu_layers=settings.GGUF_GPU_LAYERS,
-                verbose=False
-            )
-            self.use_model = True
-            self._llm_loaded = True
-            logger.info(f"GGUF Model loaded successfully with n_ctx={settings.GGUF_CONTEXT_WINDOW}, n_gpu_layers={settings.GGUF_GPU_LAYERS}.")
-            return True
+            with self._llm_lock:  # llama.cpp contexts are not thread-safe
+                # create_chat_completion applies the chat template stored in the GGUF file.
+                output = self.llm.create_chat_completion(
+                    messages=messages,
+                    max_tokens=min(1024, max(256, settings.GGUF_CONTEXT_WINDOW // 2)),
+                    temperature=0.7,
+                    top_p=0.9,
+                )
+            text = (output["choices"][0]["message"].get("content") or "").strip()
+            return text or None
         except Exception as e:
-            logger.error(f"Failed to load GGUF model: {str(e)}")
-            return False
-
-    def _generate_with_llm(self, section, ctx):
-        case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
-        p       = ctx.get("petitioner","The Petitioner")
-        r       = ctx.get("respondent","The Respondent")
-        court   = ctx.get("court","HON'BLE COURT")
-        loc     = ctx.get("location","Delhi")
-        desc    = ctx.get("description","")
-        relief  = ctx.get("relief_sought","")
-        sl      = ctx.get("statutes",[])
-        stat    = ", ".join(sl) if sl else "applicable provisions of law"
-        rag     = ctx.get("rag_context","")
-
-        prompt = f"""<|system|>
-You are an expert Indian Legal Draftsman. Draft a professional {section.replace('_', ' ')} for a {case_type} case in India.
-Follow the standard legal format and terminology used in Indian Courts for this case type.
-Use the provided context to fill in details.
-Context:
-- Case Type: {case_type}
-- Petitioner: {p}
-- Respondent: {r}
-- Court: {court}
-- Location: {loc}
-- Description: {desc}
-- Relief Sought: {relief}
-- Statutes: {stat}
-- Additional RAG Context: {rag}
-
-Draft the {section.replace('_', ' ')} section only.
-<|assistant|>
-"""
-        try:
-            output = self.llm(
-                prompt,
-                max_tokens=1024,
-                stop=["<|end|>", "</s>"],
-                temperature=0.7,
-                top_p=0.9
-            )
-            return output["choices"][0]["text"].strip()
-        except Exception as e:
-            logger.error(f"LLM generation failed: {str(e)}")
+            logger.error(f"Local LLM generation failed: {e}")
             return None
 
     def _section_prompt(self, section: str, ctx: Dict) -> str:
@@ -258,6 +296,11 @@ Draft the {section.replace('_', ' ')} section only.
         stat = ", ".join(sl) if sl else "applicable provisions of law"
         rag = ctx.get("rag_context", "")
         type_instruction = self.CASE_TYPE_INSTRUCTIONS.get(case_type, "")
+        # Free-text instructions typed next to "Regenerate" in the UI.
+        extra = (ctx.get("additional_context") or "").strip()
+        extra_block = (
+            f"Additional instructions from the drafter: {extra}\n" if extra else ""
+        )
         return (
             f"You are an expert Indian legal draftsman. Draft ONLY the "
             f"'{section.replace('_', ' ')}' section of a legal pleading for a "
@@ -267,66 +310,57 @@ Draft the {section.replace('_', ' ')} section only.
             f"Court: {court}\nLocation: {loc}\nFacts: {desc}\n"
             f"Relief Sought: {relief}\nStatutes: {stat}\n"
             f"Relevant precedents:\n{rag}\n"
+            f"{extra_block}"
             f"Output the section text only, no explanations."
         )
 
-    def _generate_with_cloud(self, section: str, ctx: Dict) -> Optional[str]:
-        """Draft one section via the resolved cloud LLM with fallback chain.
+    def _cloud_usable(self) -> bool:
+        return bool(self.client and self.client.available)
 
-        Fallback chain: primary provider -> Groq -> HF -> local GGUF -> template.
-        Returns None on total failure so caller can handle.
+    def _provider_order(self) -> List[str]:
+        """Resolved primary provider first, then the other configured ones."""
+        order = [self._provider] if self._provider in self._clients else []
+        order += [
+            name
+            for name in ("openai", "hf", "groq")
+            if name in self._clients and name not in order
+        ]
+        return order
+
+    def _generate_with_cloud(
+        self, section: str, ctx: Dict, retries: int = 0
+    ) -> Optional[SectionResult]:
+        """Draft one section through the cloud provider chain.
+
+        Primary provider first, then the other configured providers; a provider that is in
+        its failure cooldown is skipped. Returns (text, "provider:model"), or None when no
+        provider produced text. Blocking: call from a worker thread.
         """
-        if not self.client or not self.client.available:
+        if not self._cloud_usable():  # also covers MODEL_PROVIDER=local/template
             return None
 
-        # Try primary provider first
         messages = [
             {"role": "system", "content": "You are an expert Indian legal draftsman."},
             {"role": "user", "content": self._section_prompt(section, ctx)},
         ]
-        text = self.client.chat(messages, temperature=0.7, max_tokens=1024)
-        if text:
-            return text
-
-        logger.warning(f"Primary LLM ({self._provider}/{self.client.model}) failed, trying fallback chain...")
-
-        # Fallback chain: try other providers if available
-        fallback_order = []
-        if self._provider != "groq" and settings.GROQ_API_KEY:
-            fallback_order.append(("groq", settings.GROQ_API_KEY, settings.GROQ_MODEL))
-        if self._provider != "hf" and settings.HF_API_TOKEN:
-            fallback_order.append(("hf", settings.HF_API_TOKEN, settings.HF_MODEL))
-
-        for provider_name, api_key, model_name in fallback_order:
-            try:
-                logger.info(f"Trying fallback provider: {provider_name} ({model_name})")
-                fallback_client = self._create_fallback_client(provider_name, api_key, model_name)
-                if fallback_client and fallback_client.available:
-                    text = fallback_client.chat(messages, temperature=0.7, max_tokens=1024)
-                    if text:
-                        logger.info(f"Fallback provider {provider_name} succeeded")
-                        return text
-            except Exception as e:
-                logger.warning(f"Fallback provider {provider_name} failed: {e}")
+        for name in self._provider_order():
+            client = self._clients[name]
+            if not client.available or self._is_provider_failed(name):
                 continue
+            text = client.chat(messages, temperature=0.7, retries=retries)
+            if text:
+                return text, f"{name}:{client.model}"
+            self._mark_provider_failed(name)
 
-        logger.warning("All cloud providers failed, will fall back to local/template")
-        return None
-
-    def _create_fallback_client(self, provider: str, api_key: str, model: str):
-        """Create a temporary LLMClient for fallback."""
-        from app.nlp.llm_client import LLMClient
-        if provider == "groq":
-            return LLMClient("https://api.groq.com/openai/v1", api_key, model)
-        elif provider == "hf":
-            hf_url = settings.HF_BASE_URL or "https://router.huggingface.co/v1"
-            return LLMClient(hf_url, api_key, model)
+        logger.warning("No cloud LLM produced text for '%s'.", section)
         return None
 
     def _parties_block(self, cfg, p, r):
         """Shared 'IN THE MATTER OF ... Versus ...' block used by most sections."""
-        return (f"IN THE MATTER OF:\n\n{p}\n\t\t\t\t……………………………………{cfg['p_label']}\n\n"
-                f"Versus\n\n{r}\n\t\t\t\t……………………………………………{cfg['r_label']}\n\n")
+        return (
+            f"IN THE MATTER OF:\n\n{p}\n\t\t\t\t……………………………………{cfg['p_label']}\n\n"
+            f"Versus\n\n{r}\n\t\t\t\t……………………………………………{cfg['r_label']}\n\n"
+        )
 
     def _court_header(self, court, loc, cfg, yr):
         return f"IN THE COURT OF {court.upper()}\n{loc.upper()} COURTS\n\n{cfg['case_no_label']} …………..{yr}\n\n"
@@ -385,57 +419,81 @@ Draft the {section.replace('_', ' ')} section only.
 
     def _prayer_text(self, case_type, p, r, relief, stat):
         if case_type == "Criminal":
-            return (f"\tIt is, therefore, most respectfully prayed that the Hon’ble Court may be pleased to take cognizance of this complaint and the Accused, {r}, may kindly be summoned, tried and punished for the offence committed u/s {stat} in accordance with law, in the interest of justice.\n\n"
-                    f"\t{relief}.\n\n"
-                    f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Complainant and against the Accused, in the interest of justice.")
-        if case_type == "Family Law":
-            return (f"\tIt is, therefore, most respectfully prayed that the Hon’ble Family Court may be pleased to grant the relief sought against the Respondent, {r}, in accordance with {stat}, in the interest of justice.\n\n"
-                    f"\t{relief}.\n\n"
-                    f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Petitioner, in the interest of justice.")
-        if case_type == "Labour / Employment":
-            return (f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court/Tribunal may be pleased to direct reinstatement of the Workman, {p}, with full back wages and continuity of service against the Management, {r}, under {stat}, in the interest of justice.\n\n"
-                    f"\t{relief}.\n\n"
-                    f"Any other or further order which this Hon’ble Court/Tribunal may deem fit and proper may also be passed in favour of the Workman, in the interest of justice.")
-        if case_type == "Constitutional":
-            return (f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to issue an appropriate writ, order, or direction quashing the impugned action of the Respondent, {r}, as being violative of {stat}, in the interest of justice.\n\n"
-                    f"\t{relief}.\n\n"
-                    f"Any other or further writ, order, or direction which this Hon’ble Court may deem fit and proper may also be passed in favour of the Petitioner, in the interest of justice.")
-        if case_type == "Property Dispute":
-            return (f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit for possession and grant a permanent injunction restraining the Defendant, {r}, from interfering with the Plaintiff’s peaceful possession, under {stat}, in the interest of justice.\n\n"
-                    f"\t{relief}.\n\n"
-                    f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Plaintiff, in the interest of justice.")
-        # Civil default
-        return (f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit in favour of the Plaintiff and against the Defendant, {r}, for recovery of damages along with interest and costs under {stat}, in the interest of justice.\n\n"
+            return (
+                f"\tIt is, therefore, most respectfully prayed that the Hon’ble Court may be pleased to take cognizance of this complaint and the Accused, {r}, may kindly be summoned, tried and punished for the offence committed u/s {stat} in accordance with law, in the interest of justice.\n\n"
                 f"\t{relief}.\n\n"
-                f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Plaintiff, in the interest of justice.")
+                f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Complainant and against the Accused, in the interest of justice."
+            )
+        if case_type == "Family Law":
+            return (
+                f"\tIt is, therefore, most respectfully prayed that the Hon’ble Family Court may be pleased to grant the relief sought against the Respondent, {r}, in accordance with {stat}, in the interest of justice.\n\n"
+                f"\t{relief}.\n\n"
+                f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Petitioner, in the interest of justice."
+            )
+        if case_type == "Labour / Employment":
+            return (
+                f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court/Tribunal may be pleased to direct reinstatement of the Workman, {p}, with full back wages and continuity of service against the Management, {r}, under {stat}, in the interest of justice.\n\n"
+                f"\t{relief}.\n\n"
+                f"Any other or further order which this Hon’ble Court/Tribunal may deem fit and proper may also be passed in favour of the Workman, in the interest of justice."
+            )
+        if case_type == "Constitutional":
+            return (
+                f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to issue an appropriate writ, order, or direction quashing the impugned action of the Respondent, {r}, as being violative of {stat}, in the interest of justice.\n\n"
+                f"\t{relief}.\n\n"
+                f"Any other or further writ, order, or direction which this Hon’ble Court may deem fit and proper may also be passed in favour of the Petitioner, in the interest of justice."
+            )
+        if case_type == "Property Dispute":
+            return (
+                f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit for possession and grant a permanent injunction restraining the Defendant, {r}, from interfering with the Plaintiff’s peaceful possession, under {stat}, in the interest of justice.\n\n"
+                f"\t{relief}.\n\n"
+                f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Plaintiff, in the interest of justice."
+            )
+        # Civil default
+        return (
+            f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit in favour of the Plaintiff and against the Defendant, {r}, for recovery of damages along with interest and costs under {stat}, in the interest of justice.\n\n"
+            f"\t{relief}.\n\n"
+            f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Plaintiff, in the interest of justice."
+        )
 
     def _witnesses_for(self, case_type, p):
         common_tail = ["Any other witness with the permission of this Hon’ble Court."]
         if case_type == "Criminal":
-            return [f"Authorised Representative of the Complainant, {p}, who is well conversant with the facts and circumstances of the complaint.",
-                    "Clerk / Officer of the bank on which the cheque was drawn, with all relevant records.",
-                    "Clerk / Officer of the bank where the cheque was deposited for realisation, with all relevant records.",
-                    "Clerk / Officer of the concerned Post Office with relevant records."] + common_tail
+            return [
+                f"Authorised Representative of the Complainant, {p}, who is well conversant with the facts and circumstances of the complaint.",
+                "Clerk / Officer of the bank on which the cheque was drawn, with all relevant records.",
+                "Clerk / Officer of the bank where the cheque was deposited for realisation, with all relevant records.",
+                "Clerk / Officer of the concerned Post Office with relevant records.",
+            ] + common_tail
         if case_type == "Family Law":
-            return [f"The Petitioner, {p}, in person.",
-                    "Family members/relatives acquainted with the facts of the marriage and the conduct complained of.",
-                    "Marriage counsellor / mediator, if any was engaged."] + common_tail
+            return [
+                f"The Petitioner, {p}, in person.",
+                "Family members/relatives acquainted with the facts of the marriage and the conduct complained of.",
+                "Marriage counsellor / mediator, if any was engaged.",
+            ] + common_tail
         if case_type == "Labour / Employment":
-            return [f"The Workman, {p}, in person.",
-                    "Co-workers/colleagues with knowledge of the circumstances of termination.",
-                    "Representative of the Trade Union, if applicable.",
-                    "Officer of the Management with custody of service/personnel records."] + common_tail
+            return [
+                f"The Workman, {p}, in person.",
+                "Co-workers/colleagues with knowledge of the circumstances of termination.",
+                "Representative of the Trade Union, if applicable.",
+                "Officer of the Management with custody of service/personnel records.",
+            ] + common_tail
         if case_type == "Constitutional":
-            return [f"The Petitioner, {p}, in person, on the basis of the accompanying affidavit.",
-                    "Officer of the Respondent authority with custody of the impugned order/records."] + common_tail
+            return [
+                f"The Petitioner, {p}, in person, on the basis of the accompanying affidavit.",
+                "Officer of the Respondent authority with custody of the impugned order/records.",
+            ] + common_tail
         if case_type == "Property Dispute":
-            return [f"The Plaintiff, {p}, in person.",
-                    "Neighbours/local residents acquainted with possession of the suit property.",
-                    "Revenue/Municipal official with custody of land/property records."] + common_tail
+            return [
+                f"The Plaintiff, {p}, in person.",
+                "Neighbours/local residents acquainted with possession of the suit property.",
+                "Revenue/Municipal official with custody of land/property records.",
+            ] + common_tail
         # Civil default
-        return [f"Authorised Representative of the Plaintiff, {p}, who is well conversant with the facts and circumstances of the suit.",
-                "Witness(es) to the transaction/agreement between the parties.",
-                "Any expert witness, if required."] + common_tail
+        return [
+            f"Authorised Representative of the Plaintiff, {p}, who is well conversant with the facts and circumstances of the suit.",
+            "Witness(es) to the transaction/agreement between the parties.",
+            "Any expert witness, if required.",
+        ] + common_tail
 
     def _documents_for(self, case_type, amt, inc):
         if case_type == "Criminal":
@@ -491,113 +549,154 @@ Draft the {section.replace('_', ' ')} section only.
 
     def _affidavit_body(self, case_type, p, inc, amt, stat):
         if case_type == "Criminal":
-            return (f"1.\tThat the deponent is the Authorised Representative of the Complainant who has filed the above complaint with regard to the cheque dated {inc} for a sum of {amt}.\n\n"
-                    f"2.\tThat the Complainant has not filed any other complaint/case regarding the dishonoring of the above said cheque in any other court except the present complaint. The contents of the accompanying complaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity.")
+            return (
+                f"1.\tThat the deponent is the Authorised Representative of the Complainant who has filed the above complaint with regard to the cheque dated {inc} for a sum of {amt}.\n\n"
+                f"2.\tThat the Complainant has not filed any other complaint/case regarding the dishonoring of the above said cheque in any other court except the present complaint. The contents of the accompanying complaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
+            )
         if case_type == "Family Law":
-            return (f"1.\tThat the deponent is the Petitioner who has filed the above petition under {stat}.\n\n"
-                    f"2.\tThat the deponent has not filed any other petition seeking the same relief in any other court except the present petition. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity.")
+            return (
+                f"1.\tThat the deponent is the Petitioner who has filed the above petition under {stat}.\n\n"
+                f"2.\tThat the deponent has not filed any other petition seeking the same relief in any other court except the present petition. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
+            )
         if case_type == "Labour / Employment":
-            return (f"1.\tThat the deponent is the Workman who has filed the above petition with regard to the termination dated {inc} under {stat}.\n\n"
-                    f"2.\tThat the deponent has not raised this industrial dispute in any other forum except the present proceedings. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity.")
+            return (
+                f"1.\tThat the deponent is the Workman who has filed the above petition with regard to the termination dated {inc} under {stat}.\n\n"
+                f"2.\tThat the deponent has not raised this industrial dispute in any other forum except the present proceedings. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
+            )
         if case_type == "Constitutional":
-            return (f"1.\tThat the deponent is the Petitioner who has filed the above writ petition in respect of the impugned action dated {inc} under {stat}.\n\n"
-                    f"2.\tThat the deponent has not filed any other petition seeking the same relief in any other court except the present petition. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity.")
+            return (
+                f"1.\tThat the deponent is the Petitioner who has filed the above writ petition in respect of the impugned action dated {inc} under {stat}.\n\n"
+                f"2.\tThat the deponent has not filed any other petition seeking the same relief in any other court except the present petition. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
+            )
         if case_type == "Property Dispute":
-            return (f"1.\tThat the deponent is the Plaintiff who has filed the above suit with regard to the property and the dispossession/interference dated {inc} valued at {amt}.\n\n"
-                    f"2.\tThat the deponent has not filed any other suit seeking the same relief in any other court except the present suit. The contents of the accompanying plaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity.")
+            return (
+                f"1.\tThat the deponent is the Plaintiff who has filed the above suit with regard to the property and the dispossession/interference dated {inc} valued at {amt}.\n\n"
+                f"2.\tThat the deponent has not filed any other suit seeking the same relief in any other court except the present suit. The contents of the accompanying plaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
+            )
         # Civil default
-        return (f"1.\tThat the deponent is the Authorised Representative of the Plaintiff who has filed the above suit with regard to the breach dated {inc} and damages of {amt}.\n\n"
-                f"2.\tThat the Plaintiff has not filed any other suit seeking the same relief in any other court except the present suit. The contents of the accompanying plaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity.")
+        return (
+            f"1.\tThat the deponent is the Authorised Representative of the Plaintiff who has filed the above suit with regard to the breach dated {inc} and damages of {amt}.\n\n"
+            f"2.\tThat the Plaintiff has not filed any other suit seeking the same relief in any other court except the present suit. The contents of the accompanying plaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
+        )
 
     def _evidence_body(self, case_type, sd, inc, amt, stat):
         if case_type == "Criminal":
-            return (f"1.\tI am well conversant with the facts and circumstances of the complaint and am duly authorised to represent the firm before this Hon’ble Court. The Original resolution is exhibited as EX. CW-1/1.\n\n"
-                    f"2.\t{sd}\n\tThe copy of ledger account / invoices is exhibited as EX. CW-1/2.\n\n"
-                    f"3.\tThat the Accused issued a cheque dated {inc} for a sum of {amt} in favour of the Complainant which was dishonoured. The original cheque is exhibited as EX. CW-1/3 and the dishonour memo is exhibited as EX. CW-1/4.\n\n"
-                    f"4.\tThat the legal demand notice was duly served upon the Accused who failed to pay within 15 days. Legal notice is exhibited as EX. CW-1/5. Postal receipt and POD is exhibited as EX. CW-1/6. Email copy is exhibited as EX. CW-1/7.\n\n"
-                    f"5.\tThat the Accused is liable to be prosecuted u/s {stat}. I hereby close my pre-summoning evidence. My statements are true and correct.")
+            return (
+                f"1.\tI am well conversant with the facts and circumstances of the complaint and am duly authorised to represent the firm before this Hon’ble Court. The Original resolution is exhibited as EX. CW-1/1.\n\n"
+                f"2.\t{sd}\n\tThe copy of ledger account / invoices is exhibited as EX. CW-1/2.\n\n"
+                f"3.\tThat the Accused issued a cheque dated {inc} for a sum of {amt} in favour of the Complainant which was dishonoured. The original cheque is exhibited as EX. CW-1/3 and the dishonour memo is exhibited as EX. CW-1/4.\n\n"
+                f"4.\tThat the legal demand notice was duly served upon the Accused who failed to pay within 15 days. Legal notice is exhibited as EX. CW-1/5. Postal receipt and POD is exhibited as EX. CW-1/6. Email copy is exhibited as EX. CW-1/7.\n\n"
+                f"5.\tThat the Accused is liable to be prosecuted u/s {stat}. I hereby close my pre-summoning evidence. My statements are true and correct."
+            )
         if case_type == "Family Law":
-            return (f"1.\tI am well conversant with the facts and circumstances of the petition and the marriage between the parties.\n\n"
-                    f"2.\t{sd}\n\tThe copy of marriage certificate is exhibited as EX. PW-1/1.\n\n"
-                    f"3.\tThat the cruelty/desertion described above occurred on or about {inc}, rendering it impossible for me to continue to reside with the Respondent. Supporting photographs/correspondence are exhibited as EX. PW-1/2.\n\n"
-                    f"4.\tThat I am entitled to the relief sought under {stat}. I hereby close my evidence. My statements are true and correct.")
+            return (
+                f"1.\tI am well conversant with the facts and circumstances of the petition and the marriage between the parties.\n\n"
+                f"2.\t{sd}\n\tThe copy of marriage certificate is exhibited as EX. PW-1/1.\n\n"
+                f"3.\tThat the cruelty/desertion described above occurred on or about {inc}, rendering it impossible for me to continue to reside with the Respondent. Supporting photographs/correspondence are exhibited as EX. PW-1/2.\n\n"
+                f"4.\tThat I am entitled to the relief sought under {stat}. I hereby close my evidence. My statements are true and correct."
+            )
         if case_type == "Labour / Employment":
-            return (f"1.\tI am well conversant with the facts and circumstances of the petition and the terms of my employment.\n\n"
-                    f"2.\t{sd}\n\tThe copy of appointment letter is exhibited as EX. WW-1/1.\n\n"
-                    f"3.\tThat my services were terminated on {inc} without notice or retrenchment compensation of {amt}, in violation of {stat}. The termination order is exhibited as EX. WW-1/2.\n\n"
-                    f"4.\tThat I am entitled to reinstatement and back wages under {stat}. I hereby close my evidence. My statements are true and correct.")
+            return (
+                f"1.\tI am well conversant with the facts and circumstances of the petition and the terms of my employment.\n\n"
+                f"2.\t{sd}\n\tThe copy of appointment letter is exhibited as EX. WW-1/1.\n\n"
+                f"3.\tThat my services were terminated on {inc} without notice or retrenchment compensation of {amt}, in violation of {stat}. The termination order is exhibited as EX. WW-1/2.\n\n"
+                f"4.\tThat I am entitled to reinstatement and back wages under {stat}. I hereby close my evidence. My statements are true and correct."
+            )
         if case_type == "Constitutional":
-            return (f"1.\tI am well conversant with the facts and circumstances of the writ petition.\n\n"
-                    f"2.\t{sd}\n\tThe copy of the impugned order is exhibited as EX. PW-1/1.\n\n"
-                    f"3.\tThat the impugned action dated {inc} violates {stat}, and I have exhausted the available remedies before approaching this Hon’ble Court. Supporting representations are exhibited as EX. PW-1/2.\n\n"
-                    f"4.\tThat I am entitled to the relief sought. I hereby close my evidence. My statements are true and correct.")
+            return (
+                f"1.\tI am well conversant with the facts and circumstances of the writ petition.\n\n"
+                f"2.\t{sd}\n\tThe copy of the impugned order is exhibited as EX. PW-1/1.\n\n"
+                f"3.\tThat the impugned action dated {inc} violates {stat}, and I have exhausted the available remedies before approaching this Hon’ble Court. Supporting representations are exhibited as EX. PW-1/2.\n\n"
+                f"4.\tThat I am entitled to the relief sought. I hereby close my evidence. My statements are true and correct."
+            )
         if case_type == "Property Dispute":
-            return (f"1.\tI am well conversant with the facts and circumstances of the suit and my title/possession over the suit property.\n\n"
-                    f"2.\t{sd}\n\tThe copy of title documents is exhibited as EX. PW-1/1.\n\n"
-                    f"3.\tThat the Defendant illegally interfered with/dispossessed me from the suit property valued at {amt} on or about {inc}. Supporting revenue records are exhibited as EX. PW-1/2.\n\n"
-                    f"4.\tThat I am entitled to possession and injunction under {stat}. I hereby close my evidence. My statements are true and correct.")
+            return (
+                f"1.\tI am well conversant with the facts and circumstances of the suit and my title/possession over the suit property.\n\n"
+                f"2.\t{sd}\n\tThe copy of title documents is exhibited as EX. PW-1/1.\n\n"
+                f"3.\tThat the Defendant illegally interfered with/dispossessed me from the suit property valued at {amt} on or about {inc}. Supporting revenue records are exhibited as EX. PW-1/2.\n\n"
+                f"4.\tThat I am entitled to possession and injunction under {stat}. I hereby close my evidence. My statements are true and correct."
+            )
         # Civil default
-        return (f"1.\tI am well conversant with the facts and circumstances of the suit and am duly authorised to represent the Plaintiff before this Hon’ble Court.\n\n"
-                f"2.\t{sd}\n\tThe copy of agreement / ledger account is exhibited as EX. CW-1/1.\n\n"
-                f"3.\tThat the Defendant breached the agreement on or about {inc}, causing damages of {amt} to the Plaintiff. Supporting correspondence is exhibited as EX. CW-1/2.\n\n"
-                f"4.\tThat the Plaintiff is entitled to recover the said damages under {stat}. I hereby close my evidence. My statements are true and correct.")
+        return (
+            f"1.\tI am well conversant with the facts and circumstances of the suit and am duly authorised to represent the Plaintiff before this Hon’ble Court.\n\n"
+            f"2.\t{sd}\n\tThe copy of agreement / ledger account is exhibited as EX. CW-1/1.\n\n"
+            f"3.\tThat the Defendant breached the agreement on or about {inc}, causing damages of {amt} to the Plaintiff. Supporting correspondence is exhibited as EX. CW-1/2.\n\n"
+            f"4.\tThat the Plaintiff is entitled to recover the said damages under {stat}. I hereby close my evidence. My statements are true and correct."
+        )
+
+    def _prepare_context(self, ctx: Dict) -> Dict:
+        """Classification gate: validate the case type BEFORE generating (works on a copy)."""
+        ctx = dict(ctx)
+        ctx["case_type"] = self.check_case_type(ctx)
+        return ctx
+
+    def _generate_ai(
+        self, section: str, ctx: Dict, retries: int = 0
+    ) -> Optional[SectionResult]:
+        """AI-written text for a section: cloud provider chain first, then the local GGUF model.
+
+        Returns None when no model produced text (the caller decides whether a template is acceptable).
+        """
+        result = self._generate_with_cloud(section, ctx, retries=retries)
+        if result:
+            return result
+        if settings.ENABLE_LOCAL_LLM and self._ensure_local_llm():
+            text = self._generate_with_llm(section, ctx)
+            if text:
+                return text, "local-llm"
+        return None
+
+    def _generate_section_with_source(self, section: str, ctx: Dict) -> SectionResult:
+        """Cloud LLM -> local GGUF -> hardcoded template, reporting which one produced the text."""
+        ctx = self._prepare_context(ctx)
+        result = self._generate_ai(section, ctx)
+        if result:
+            return result
+        return self._template_section(section, ctx), "template"
 
     def _t(self, section, ctx):
-        # STEP 1 — classification gate: validate case type BEFORE generating.
-        case_type = self.check_case_type(ctx)
-        ctx = dict(ctx)
-        ctx["case_type"] = case_type
+        return self._generate_section_with_source(section, ctx)[0]
 
-        # STEP 2 — priority: resolved cloud LLM (any provider) -> local GGUF
-        # -> hardcoded templates.
-        # Skip failed providers
-        if self.client and self.client.available and not self._is_provider_failed(self._provider):
-            cloud_text = self._generate_with_cloud(section, ctx)
-            if cloud_text:
-                return cloud_text
-            # Mark provider as failed if cloud generation failed
-            self._mark_provider_failed(self._provider)
-            self.client = None  # Disable this client for subsequent calls
-
-        if self.use_model and self.llm:
-            llm_text = self._generate_with_llm(section, ctx)
-            if llm_text:
-                return llm_text
-
-        if self.use_model and self.llm:
-            llm_text = self._generate_with_llm(section, ctx)
-            if llm_text:
-                return llm_text
-
-        # Fallback to hardcoded, case-type-specific templates.
+    def _template_section(self, section: str, ctx: Dict) -> str:
+        """Hardcoded, case-type-specific template (no model involved)."""
         case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
-        cfg     = CASE_TYPE_CONFIG.get(case_type, CASE_TYPE_CONFIG[DEFAULT_CASE_TYPE])
-        p       = ctx.get("petitioner", f"The {cfg['p_label']}")
-        r       = ctx.get("respondent", f"The {cfg['r_label']}")
-        court   = ctx.get("court","HON'BLE COURT")
-        loc     = ctx.get("location","Delhi")
-        desc    = ctx.get("description","")
-        relief  = ctx.get("relief_sought","appropriate relief as deemed fit by this Hon'ble Court")
-        inc     = ctx.get("incident_date","the relevant date")
-        sl      = ctx.get("statutes",[])
-        stat    = ", ".join(sl) if sl else "applicable provisions of law"
-        ml      = ctx.get("money",[])
-        amt     = ml[0] if ml else "the due amount"
-        yr      = datetime.datetime.now().year
-        rag     = ctx.get("rag_context","")
-        rn      = "\n\n[Note: Draft prepared with reference to similar legal precedents via RAG.]" if rag else ""
-        sig     = (f"\t\t\t\t\t\t\t\t\t{cfg['p_label'].upper()}\n{loc}\t\t\t\t\t\t\tThrough\n"
-                   f"Dated: ___________\t\t\t\t\t\t\t\tCounsel")
+        cfg = CASE_TYPE_CONFIG.get(case_type, CASE_TYPE_CONFIG[DEFAULT_CASE_TYPE])
+        p = ctx.get("petitioner", f"The {cfg['p_label']}")
+        r = ctx.get("respondent", f"The {cfg['r_label']}")
+        court = ctx.get("court", "HON'BLE COURT")
+        loc = ctx.get("location", "Delhi")
+        desc = ctx.get("description", "")
+        relief = ctx.get(
+            "relief_sought", "appropriate relief as deemed fit by this Hon'ble Court"
+        )
+        inc = ctx.get("incident_date", "the relevant date")
+        sl = ctx.get("statutes", [])
+        stat = ", ".join(sl) if sl else "applicable provisions of law"
+        ml = ctx.get("money", [])
+        amt = ml[0] if ml else "the due amount"
+        yr = datetime.datetime.now().year
+        rag = ctx.get("rag_context", "")
+        rn = (
+            "\n\n[Note: Draft prepared with reference to similar legal precedents via RAG.]"
+            if rag
+            else ""
+        )
+        sig = (
+            f"\t\t\t\t\t\t\t\t\t{cfg['p_label'].upper()}\n{loc}\t\t\t\t\t\t\tThrough\n"
+            f"Dated: ___________\t\t\t\t\t\t\t\tCounsel"
+        )
 
         if section == "title_block":
             ps_line = f"\t\t\t\t\t\t\t\t\t\tP.S.- {loc}\n\n" if cfg["show_ps"] else ""
-            return (f"{self._court_header(court, loc, cfg, yr)}"
-                    f"IN THE MATTER OF:\n\n{p}\nThrough its Authorised Representative\n"
-                    f"\t\t\t\t\t\t\t……………………………………{cfg['p_label']}\n\n"
-                    f"\t\t\t\tVersus\n\n{r}\n"
-                    f"\t\t\t\t\t\t\t……………………………………………{cfg['r_label']}\n\n"
-                    f"{ps_line}"
-                    f"{cfg['doc_title'].format(stat=stat, amt=amt)}")
+            return (
+                f"{self._court_header(court, loc, cfg, yr)}"
+                f"IN THE MATTER OF:\n\n{p}\nThrough its Authorised Representative\n"
+                f"\t\t\t\t\t\t\t……………………………………{cfg['p_label']}\n\n"
+                f"\t\t\t\tVersus\n\n{r}\n"
+                f"\t\t\t\t\t\t\t……………………………………………{cfg['r_label']}\n\n"
+                f"{ps_line}"
+                f"{cfg['doc_title'].format(stat=stat, amt=amt)}"
+            )
 
         if section == "complaint_body":
             return f"MOST RESPECTFULLY SHOWETH:\n\n{self._narrative_paragraphs(case_type, p, r, desc, inc, amt, stat, rn)}"
@@ -608,86 +707,114 @@ Draft the {section.replace('_', ' ')} section only.
         if section == "list_of_witnesses":
             witnesses = self._witnesses_for(case_type, p)
             body = "\n\n".join(f"{i}.\t{w}" for i, w in enumerate(witnesses, 1))
-            return (f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
-                    f"LIST OF WITNESSES\n\n{body}\n\n\n{sig}")
+            return (
+                f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
+                f"LIST OF WITNESSES\n\n{body}\n\n\n{sig}"
+            )
 
         if section == "list_of_documents":
             documents = self._documents_for(case_type, amt, inc)
             annexures = [chr(ord("A") + i) for i in range(len(documents))]
-            body = "\n\n".join(f"{i}.\t{d}\t\t\t\t[Annexure – {a}]" for i, (d, a) in enumerate(zip(documents, annexures), 1))
-            return (f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
-                    f"LIST OF DOCUMENTS\n\nSr. No.\tDescription of Document\t\t\t\t\t\tAnnexure\n\n{body}\n\n\n{sig}")
+            body = "\n\n".join(
+                f"{i}.\t{d}\t\t\t\t[Annexure – {a}]"
+                for i, (d, a) in enumerate(zip(documents, annexures), 1)
+            )
+            return (
+                f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
+                f"LIST OF DOCUMENTS\n\nSr. No.\tDescription of Document\t\t\t\t\t\tAnnexure\n\n{body}\n\n\n{sig}"
+            )
 
         if section == "affidavit":
-            return (f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
-                    f"AFFIDAVIT\n\n"
-                    f"I, the deponent, {cfg['p_label']} herein / Authorised Representative of {p}, having its office at {loc}, do hereby solemnly affirm and declare as under:\n\n"
-                    f"{self._affidavit_body(case_type, p, inc, amt, stat)}\n\n\n"
-                    f"Deponent\n\n\n"
-                    f"VERIFICATION:\n\n"
-                    f"Verified at {loc} on this _____ day of _____________ {yr}, that the contents of the above affidavit are true and correct to my knowledge and no part of it is false and nothing material has been concealed therefrom.\n\n\n"
-                    f"Deponent")
+            return (
+                f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
+                f"AFFIDAVIT\n\n"
+                f"I, the deponent, {cfg['p_label']} herein / Authorised Representative of {p}, having its office at {loc}, do hereby solemnly affirm and declare as under:\n\n"
+                f"{self._affidavit_body(case_type, p, inc, amt, stat)}\n\n\n"
+                f"Deponent\n\n\n"
+                f"VERIFICATION:\n\n"
+                f"Verified at {loc} on this _____ day of _____________ {yr}, that the contents of the above affidavit are true and correct to my knowledge and no part of it is false and nothing material has been concealed therefrom.\n\n\n"
+                f"Deponent"
+            )
 
         if section == "evidence_affidavit":
             sd = desc[:500] + "..." if len(desc) > 500 else desc
-            return (f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
-                    f"EVIDENCE BY WAY OF AFFIDAVIT\n\n"
-                    f"I, the deponent, {cfg['p_label']} herein / Authorised Representative of {p}, having its office at {loc}, do hereby solemnly affirm and declare as under:\n\n"
-                    f"{self._evidence_body(case_type, sd, inc, amt, stat)}\n\n\n"
-                    f"Deponent\n\n\n"
-                    f"VERIFICATION:\n\n"
-                    f"Verified at {loc} on this _____ day of _____________ {yr} that the contents of the above affidavit are true to my knowledge and no part of it is false and nothing material has been concealed therefrom.\n\n\n"
-                    f"Deponent")
+            return (
+                f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
+                f"EVIDENCE BY WAY OF AFFIDAVIT\n\n"
+                f"I, the deponent, {cfg['p_label']} herein / Authorised Representative of {p}, having its office at {loc}, do hereby solemnly affirm and declare as under:\n\n"
+                f"{self._evidence_body(case_type, sd, inc, amt, stat)}\n\n\n"
+                f"Deponent\n\n\n"
+                f"VERIFICATION:\n\n"
+                f"Verified at {loc} on this _____ day of _____________ {yr} that the contents of the above affidavit are true to my knowledge and no part of it is false and nothing material has been concealed therefrom.\n\n\n"
+                f"Deponent"
+            )
 
         return "Section content not available."
 
-    def generate_section(self, section, context): return self._t(section, context)
+    def generate_section(self, section, context):
+        """Blocking: call from a worker thread (asyncio.to_thread)."""
+        return self._t(section, context)
 
     async def generate_all_sections(self, context, strict: bool = False):
         """Generate all 7 draft sections.
 
         strict=False (default, used by the form flow): cloud LLM -> local
             GGUF -> hardcoded templates. A draft is always produced.
-        strict=True (used by the AI-chat flow): cloud LLM ONLY. If no model
-            is configured or the model fails on any section, raise
-            RuntimeError instead of silently serving a template — the caller
+        strict=True (used by the AI-chat flow): AI models ONLY (cloud LLM, then
+            the local GGUF model). If none of them can write a section, raise
+            RuntimeError instead of silently serving a template - the caller
             marks the case 'failed' and the chat tells the user honestly.
+
+        The returned dict holds the 7 section texts plus three bookkeeping keys that
+        callers must pop before storing the sections: ``_generation_time``,
+        ``_full_text`` and ``_model_used`` (what really wrote the text).
+
+        Every blocking step (HTTP calls, local inference) runs in a worker thread so the
+        event loop - and with it every other request - stays responsive.
         """
         start = time.time()
-        order = ["title_block","complaint_body","prayer","list_of_witnesses","list_of_documents","affidavit","evidence_affidavit"]
-        sections = {}
-        use_cloud = bool(self.client and self.client.available)
-        
-        if strict and not use_cloud:
-            # In strict mode, we still try the fallback chain but raise if ALL fail
-            pass  # Will try fallback chain below
-        
-        for i, s in enumerate(order):
+        ctx = self._prepare_context(context)
+        sections: Dict[str, str] = {}
+        sources: List[str] = []
+        last_index = len(SECTION_ORDER) - 1
+
+        for index, name in enumerate(SECTION_ORDER):
             if strict:
-                text = self._generate_with_cloud(s, context)
-                if not text:
-                    # In strict mode, try fallback chain before giving up
-                    if self.use_model and self.llm:
-                        text = self._generate_with_llm(s, context)
-                    if not text:
-                        # Try template as last resort in strict mode (bypass cloud)
-                        text = self._t(s, context)
-                    if not text:
-                        raise RuntimeError(
-                            f"Language model failed to generate the '{s}' section. "
-                            "No draft was produced."
-                        )
-                    sections[s] = text
-                else:
-                    sections[s] = self._t(s, context)
+                # A short retry here: one transient 429/503 should not discard a whole draft.
+                result = await asyncio.to_thread(self._generate_ai, name, ctx, 2)
+                if not result:
+                    raise RuntimeError(
+                        f"Language model failed to generate the '{name}' section. "
+                        "No draft was produced."
+                    )
             else:
-                sections[s] = self._t(s, context)
-            # Stagger cloud calls so the free-tier per-minute limit isn't hit.
-            if use_cloud and i < len(order) - 1:
-                time.sleep(4)
-        sections["_generation_time"] = round(time.time()-start, 2)
-        sections["_full_text"] = ("\n\n"+"="*70+"\n\n").join(sections[k] for k in order)
-        logger.info(f"All 7 sections generated in {sections['_generation_time']}s")
+                result = await asyncio.to_thread(
+                    self._generate_section_with_source, name, ctx
+                )
+
+            text, source = result
+            sections[name] = text
+            if source not in sources:
+                sources.append(source)
+
+            # Stagger remote calls so free-tier per-minute limits are not hit.
+            called_remote_model = source not in ("template", "local-llm")
+            if (
+                called_remote_model
+                and index < last_index
+                and settings.LLM_SECTION_DELAY_SECONDS > 0
+            ):
+                await asyncio.sleep(settings.LLM_SECTION_DELAY_SECONDS)
+
+        sections["_generation_time"] = round(time.time() - start, 2)
+        sections["_full_text"] = ("\n\n" + "=" * 70 + "\n\n").join(
+            sections[name] for name in SECTION_ORDER
+        )
+        sections["_model_used"] = "+".join(sources) if sources else "template"
+        logger.info(
+            f"All {len(SECTION_ORDER)} sections generated in {sections['_generation_time']}s "
+            f"({sections['_model_used']})"
+        )
         return sections
 
     # ---- Backwards-compat shims (older code probed these attrs) ----

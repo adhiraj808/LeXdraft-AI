@@ -3,49 +3,53 @@ AI-Powered Legal Case Drafting System
 FastAPI Application Entry Point
 """
 
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-import logging
 import asyncio
-import uuid
+import logging
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from app.api.routes import admin, auth, cases, fir_analysis, health, rag
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.core.rate_limit import limiter, public_limiter
-from app.db.postgres import init_db
-from app.db.redis_client import init_redis
+from app.core.middleware import (
+    BodySizeLimitMiddleware,
+    HostGuardMiddleware,
+    RequestContextMiddleware,
+)
+from app.core.rate_limit import limiter
+from app.db.postgres import dispose_engine, init_db
+from app.db.redis_client import close_redis, init_redis
 from app.nlp.pipeline import NLPPipeline
-from app.api.routes import admin, auth, cases, health, rag, fir_analysis
+from app.services.case_service import recover_stale_cases
 
 logger = logging.getLogger(__name__)
-
-# Global NLP pipeline instance (loaded once at startup)
-nlp_pipeline: NLPPipeline = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle manager."""
-    global nlp_pipeline
-
     setup_logging()
     logger.info("Starting Legal Draft AI System...")
 
-    if not settings.DEBUG and settings.SECRET_KEY == "dev-secret-key-change-in-production":
-        raise RuntimeError(
-            "SECRET_KEY is still set to the development default. "
-            "Set a real random SECRET_KEY in .env before running with DEBUG=false."
-        )
+    # Refuse to boot with a default/weak JWT signing key outside debug mode.
+    settings.assert_secure_for_runtime()
 
     # Initialize database
     logger.info("About to init_db...")
     await init_db()
     logger.info("PostgreSQL connected.")
+
+    # Mark cases orphaned by a previous process as failed (on 1 worker this is exact;
+    # with multiple workers the age gate in recover_stale_cases protects live cases).
+    try:
+        await recover_stale_cases()
+    except Exception:
+        logger.exception("Stale-case recovery failed; continuing startup.")
 
     # Initialize Redis
     logger.info("Initializing Redis...")
@@ -63,15 +67,15 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(nlp_pipeline.load())
     app.state.nlp_pipeline = nlp_pipeline
     logger.info("NLP pipeline loading started in background.")
-    
+
     logger.info("Lifespan startup complete, yielding...")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
-    from app.db.redis_client import close_redis
     await close_redis()
+    await dispose_engine()
 
 
 def create_app() -> FastAPI:
@@ -79,51 +83,33 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
         description="AI-Powered Legal Case Drafting System API",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url="/docs" if settings.DOCS_ENABLED else None,
+        redoc_url="/redoc" if settings.DOCS_ENABLED else None,
         lifespan=lifespan,
     )
-
-    # Security middleware
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=["localhost", "127.0.0.1", "0.0.0.0"]
-    )
-
-    # Request size limit middleware
-    @app.middleware("http")
-    async def limit_request_size(request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 1_048_576:  # 1MB limit
-            return Response("Payload too large", status_code=413)
-        return await call_next(request)
-
-    # Request ID middleware for tracing
-    @app.middleware("http")
-    async def add_request_id(request: Request, call_next):
-        request_id = str(uuid.uuid4())
-        request.state.request_id = request_id
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
-        return response
 
     # Rate limiter
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    # Add rate limiter middleware
-    from slowapi.middleware import SlowAPIMiddleware
     app.add_middleware(SlowAPIMiddleware)
 
-    # Public rate limiter for public endpoints
-    app.state.public_limiter = public_limiter
-
-    # CORS middleware
+    # Security / hygiene middlewares (pure ASGI, no per-request streaming wrapper).
+    # Order: last added runs first, so HostGuard sees the request first.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.ALLOWED_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_REQUEST_BYTES)
+    app.add_middleware(RequestContextMiddleware)
+    # Exempt the liveness probe: load balancers (AWS ALB) probe by IP, so the Host
+    # header is the container's private IP and can never be whitelisted.
+    app.add_middleware(
+        HostGuardMiddleware,
+        allowed_hosts=settings.ALLOWED_HOSTS,
+        exempt_paths=("/api/v1/health/live",),
     )
 
     # Register routers

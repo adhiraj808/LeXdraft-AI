@@ -4,6 +4,7 @@
 # and spacy>=3.8.16 (uses typer-slim, no conflict).
 fastapi>=0.115,<0.117
 uvicorn[standard]>=0.30,<0.35
+gunicorn>=22.0.0
 python-multipart>=0.0.9
 
 # Auth
@@ -31,20 +32,15 @@ email-validator>=2.0.0
 spacy>=3.8.16
 
 # NLP & ML - full stack (RAG + embeddings + transformers, CPU).
+# Heavy and optional: install either requirements-ml.txt (Dockerfile.ml) or
+#   pip install -r requirements.txt -r requirements-ml.txt
+# for local dev with RAG/transformers. The lightweight runtime uses
+# requirements-base.txt only (template generator + cloud LLM).
 # llama-cpp-python stays OFF: needs a GGUF model file + long compile,
 # and the template generator covers drafts without it.
-transformers>=4.41.1
-torch>=2.3.0
-tokenizers>=0.19.1
-sentencepiece>=0.2.0
-accelerate>=0.30.0
-huggingface-hub>=0.23.2
-sentence-transformers>=3.0.1
-chromadb>=0.5.23
-llama-cpp-python>=0.2.76
+#
 # Training (host-side dataset + fine-tune; not needed at runtime)
-pandas>=2.0
-scikit-learn>=1.3
+# (see requirements-ml.txt)
 
 # PDF
 reportlab>=4.2.0

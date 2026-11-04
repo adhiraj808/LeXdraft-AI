@@ -9,9 +9,10 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies with better caching
+# Install dependencies with better caching (only the runtime deps; Vite needs no
+# extra build tools)
 COPY package*.json ./
-RUN npm ci --prefer-offline --no-audit --no-fund && npm cache clean --force && npm install --save-dev esbuild
+RUN npm ci --prefer-offline --no-audit --no-fund && npm cache clean --force
 
 # Build with optimized Vite config
 ARG VITE_API_URL

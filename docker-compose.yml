@@ -9,6 +9,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
+      # Docker Postgres is also usable from pgAdmin (Host: localhost, Port: 5432).
+      # It is local-dev only: never expose 5432 on a public host.
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-legaluser} -d ${POSTGRES_DB:-legal_draft_db}"]
@@ -50,10 +52,10 @@ services:
     volumes:
       - ./backend:/app
       - model_cache:/app/.cache
-    # Production command (comment out for dev)
-    # command: gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:8000
     # Development command with hot reload
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # Production command (uncomment, and comment out --reload above):
+    # command: gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:8000
 
   # Optional: ML-enabled backend (uncomment to use)
   # backend-ml:

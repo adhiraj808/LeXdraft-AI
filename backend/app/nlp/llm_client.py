@@ -13,9 +13,13 @@ Configure via .env:
   LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
 
 The API key is sent only in the Authorization header and never logged.
+
+`chat()` is synchronous and blocking: call it from a worker thread
+(``asyncio.to_thread``), never directly from the event loop.
 """
 
 import logging
+import threading
 import time
 from typing import Dict, List, Optional
 
@@ -29,22 +33,43 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """Universal chat-completions client with retries and graceful fallback."""
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 10.0):
+    def __init__(
+        self, base_url: str, api_key: str, model: str, timeout: Optional[float] = None
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else settings.LLM_TIMEOUT_SECONDS
+        # One pooled HTTP client per provider: keep-alive connections skip a TCP + TLS
+        # handshake on every call (7 sections per draft) and avoid allocator churn.
+        self._http: Optional[httpx.Client] = None
+        self._http_lock = threading.Lock()
 
     @property
     def available(self) -> bool:
         return bool(self.base_url and self.api_key and self.model)
 
+    def _client(self) -> httpx.Client:
+        with self._http_lock:
+            if self._http is None:
+                self._http = httpx.Client(
+                    timeout=httpx.Timeout(self.timeout, connect=10.0),
+                    limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+                )
+            return self._http
+
+    def close(self) -> None:
+        with self._http_lock:
+            if self._http is not None:
+                self._http.close()
+                self._http = None
+
     def chat(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
-        retries: int = 0,  # No retries for faster failure
+        max_tokens: Optional[int] = None,
+        retries: int = 0,  # failing fast is better: the caller has fallbacks
     ) -> Optional[str]:
         """Send a chat completion request. Returns text or None on failure.
 
@@ -60,25 +85,31 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens or settings.LLM_MAX_TOKENS,
         }
 
-        delays = [2, 5]  # Reduced delays
+        delays = [2, 5]
         for attempt in range(retries + 1):
             try:
-                with httpx.Client(timeout=min(self.timeout, 30.0)) as client:  # Reduced timeout
-                    resp = client.post(url, headers=headers, json=payload)
+                resp = self._client().post(url, headers=headers, json=payload)
                 if resp.status_code == 200:
-                    data = resp.json()
-                    text = data["choices"][0]["message"].get("content", "").strip()
-                    # If content is empty but reasoning exists, use reasoning
+                    choice = resp.json()["choices"][0]
+                    text = (choice.get("message", {}).get("content") or "").strip()
                     if not text:
-                        text = data["choices"][0]["message"].get("reasoning", "").strip()
-                    return text or None
+                        # Reasoning models can spend the whole token budget on hidden "thinking",
+                        # leaving `content` empty. The chain-of-thought is NOT a usable legal
+                        # draft, so report a failure and let the caller fall back.
+                        logger.warning(
+                            f"LLM {self.model} returned empty content "
+                            f"(finish_reason={choice.get('finish_reason')}); "
+                            "consider raising LLM_MAX_TOKENS."
+                        )
+                        return None
+                    return text
                 if resp.status_code in (429, 500, 502, 503) and attempt < retries:
                     wait = resp.headers.get("retry-after")
                     wait_s = (
-                        float(wait)
+                        min(float(wait), 30.0)
                         if wait and str(wait).replace(".", "", 1).isdigit()
                         else delays[min(attempt, len(delays) - 1)]
                     )
@@ -87,15 +118,17 @@ class LLMClient:
                     )
                     time.sleep(wait_s)
                     continue
-                # Log status only — never the body or key.
-                logger.warning(f"LLM {self.model} returned {resp.status_code}, giving up.")
+                # Log status only - never the body or key.
+                logger.warning(
+                    f"LLM {self.model} returned {resp.status_code}, giving up."
+                )
                 return None
             except Exception as e:
                 if attempt < retries:
-                    logger.warning(f"LLM call failed ({e}), retrying...")
+                    logger.warning(f"LLM call failed ({type(e).__name__}), retrying...")
                     time.sleep(delays[min(attempt, len(delays) - 1)])
                     continue
-                logger.warning(f"LLM call failed repeatedly: {e}")
+                logger.warning(f"LLM call failed: {type(e).__name__}: {e}")
                 return None
         return None
 
@@ -107,7 +140,7 @@ def build_default_clients() -> Dict[str, LLMClient]:
       MODEL_PROVIDER == "hf"      -> HF Inference Providers
       MODEL_PROVIDER == "groq"    -> Groq
       MODEL_PROVIDER == "openai"  -> generic LLM_BASE_URL endpoint
-      "auto"                      -> first of [generic, groq, hf] that is configured
+      "auto"                      -> first of [generic, hf, groq] that is configured
     """
     clients: Dict[str, LLMClient] = {}
 

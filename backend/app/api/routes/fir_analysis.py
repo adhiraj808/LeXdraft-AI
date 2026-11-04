@@ -227,14 +227,33 @@ FALLBACK_RESPONSES = {
 }
 
 
+# Used when the question fits none of the specific templates above (consumer, employment,
+# general questions...) - showing the *criminal* template for those would be misleading.
+FALLBACK_RESPONSES["general"] = {
+    "answer": "The AI assistant is not available right now, so this is general guidance only. Legal outcomes depend on the exact facts, the documents you hold and the law that applies to your situation. Write down the key facts and dates, keep every document, notice and message, and do not sign or admit anything before taking advice.",
+    "category": "Other",
+    "applicable_laws": [],
+    "key_points": [
+        "Keep copies of all documents, notices, receipts and messages",
+        "Note down dates, names and amounts while memory is fresh",
+        "Time limits (limitation periods) apply to most legal remedies",
+        "Free legal aid is available through the District Legal Services Authority (DLSA) if you cannot afford a lawyer"
+    ],
+    "next_steps": [
+        "Consult a qualified lawyer for your specific situation",
+        "Contact your District Legal Services Authority (NALSA helpline 15100) if you need free legal aid",
+        "Collect and organise all relevant documents before the meeting"
+    ],
+    "disclaimer": "This is general information only, not legal advice. Consult a qualified lawyer.",
+    "model_used": "template"
+}
+
+
 def get_fallback_response(question: str, language: str) -> dict:
     """Generate fallback response when AI is unavailable."""
     category = categorize_question(question)
-    template = FALLBACK_RESPONSES.get(category, FALLBACK_RESPONSES["criminal"])
-    
-    # Simple IPC section extraction
-    ipc_sections = re.findall(r'(?:Section|Sec\.?)\s*(\d+[A-Z]?)', question, re.IGNORECASE)
-    
+    template = FALLBACK_RESPONSES.get(category, FALLBACK_RESPONSES["general"])
+
     return {
         "answer": template["answer"],
         "category": template["category"],
@@ -246,11 +265,79 @@ def get_fallback_response(question: str, language: str) -> dict:
     }
 
 
-def get_legal_qa_prompt(question: str, language: str, context: Optional[str] = None) -> str:
-    return LEGAL_QA_PROMPT_TEMPLATE.replace("{{language}}", language).replace("{{question}}", question)
+def _parse_model_json(text: str) -> Optional[dict]:
+    """Parse a JSON object from model output, tolerating ```json fences and surrounding prose."""
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    candidates = [text]
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _as_str_list(value) -> List[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if item is not None and str(item).strip()]
+    return []
+
+
+def _build_answer(data: dict, model_used: str) -> LegalAnswerResponse:
+    """Coerce model output (which varies a lot between models) into the response schema."""
+    answer = str(data.get("answer") or "").strip()
+    if not answer:
+        raise ValueError("model answer is empty")
+    return LegalAnswerResponse(
+        answer=answer,
+        category=str(data.get("category") or "Other"),
+        applicable_laws=_as_str_list(data.get("applicable_laws")),
+        key_points=_as_str_list(data.get("key_points")),
+        next_steps=_as_str_list(data.get("next_steps")),
+        disclaimer=str(data.get("disclaimer") or FALLBACK_RESPONSES["general"]["disclaimer"]),
+        model_used=model_used,
+    )
+
+
+async def _answer_question(request: Request, payload: LegalQuestionRequest) -> LegalAnswerResponse:
+    """Shared implementation of the Q&A endpoints (the endpoints only add auth + rate limits)."""
+    nlp = get_nlp(request)
+    if not nlp._loaded:
+        raise HTTPException(status_code=503, detail="AI service not ready")
+
+    language = payload.language or detect_language(payload.question)
+    generator = nlp.generator
+
+    if generator and generator.client and generator.client.available:
+        try:
+            messages = [
+                {"role": "system", "content": LEGAL_QA_SYSTEM_PROMPT.replace("{{language}}", language)},
+                {"role": "user", "content": build_legal_qa_prompt(payload.question, language, payload.context)},
+            ]
+            # chat() is a blocking HTTP call: run it in a worker thread, not on the event loop.
+            response_text = await asyncio.to_thread(
+                generator.client.chat, messages, temperature=0.3, max_tokens=settings.LLM_MAX_TOKENS
+            )
+            data = _parse_model_json(response_text) if response_text else None
+            if data is not None:
+                return _build_answer(data, f"{generator._provider}:{generator.client.model}")
+            logger.warning("AI returned no usable JSON for legal Q&A, using fallback")
+        except Exception as e:
+            logger.warning(f"Cloud LLM failed for legal Q&A: {type(e).__name__}: {e}")
+
+    return LegalAnswerResponse(**get_fallback_response(payload.question, language))
 
 
 @router.post("/ask", response_model=LegalAnswerResponse)
+@limiter.limit(settings.RATE_LIMIT_QA)
 async def ask_legal_question(
     request: Request,
     payload: LegalQuestionRequest,
@@ -260,48 +347,7 @@ async def ask_legal_question(
     Ask a legal question - get plain-language answer.
     Separate from draft generation - higher rate limit.
     """
-    nlp = get_nlp(request)
-    
-    if not nlp or not nlp._loaded:
-        raise HTTPException(status_code=503, detail="AI service not ready")
-    
-    question = payload.question.strip()
-    if not question or len(question) < 5:
-        raise HTTPException(status_code=400, detail="Question too short")
-    
-    language = payload.language or detect_language(payload.question)
-    
-    # Build context from user's cases if available
-    context = payload.context
-    
-    # Try cloud LLM first
-    generator = nlp.generator
-    
-    if generator.client and generator.client.available:
-        try:
-            prompt = build_legal_qa_prompt(payload.question, language, payload.context)
-            response_text = generator.client.chat(
-                messages=[
-                    {"role": "system", "content": LEGAL_QA_SYSTEM_PROMPT.replace("{{language}}", language)},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=1500
-            )
-            
-            if response_text:
-                try:
-                    result = json.loads(response_text)
-                    result["model_used"] = f"{generator._provider}:{generator.client.model}"
-                    return LegalAnswerResponse(**result)
-                except json.JSONDecodeError:
-                    logger.warning("AI returned invalid JSON, using fallback")
-        except Exception as e:
-            logger.warning(f"Cloud LLM failed for legal Q&A: {e}")
-    
-    # Fallback
-    fallback = get_fallback_response(payload.question, payload.language)
-    return LegalAnswerResponse(**fallback)
+    return await _answer_question(request, payload)
 
 
 @router.post("/ask-stream")
@@ -312,39 +358,39 @@ async def ask_legal_question_stream(
 ):
     """Stream legal Q&A response."""
     nlp = get_nlp(request)
-    
+
     if not nlp or not nlp._loaded:
         raise HTTPException(status_code=503, detail="AI service not ready")
-    
+
     question = payload.question.strip()
     if not question or len(question) < 5:
         raise HTTPException(status_code=400, detail="Question too short")
-    
+
     language = payload.language or detect_language(payload.question)
-    
+
     async def event_generator():
         yield f"data: {json.dumps({'type': 'start', 'message': 'Analyzing your question...'})}\n\n"
-        
+
         try:
             yield f"data: {json.dumps({'type': 'progress', 'message': 'Understanding your question...'})}\n\n"
             await asyncio.sleep(0.3)
-            
+
             yield f"data: {json.dumps({'type': 'progress', 'message': 'Finding applicable laws...'})}\n\n"
             await asyncio.sleep(0.5)
-            
+
             yield f"data: {json.dumps({'type': 'progress', 'message': 'Preparing answer...'})}\n\n"
             await asyncio.sleep(0.5)
-            
+
             # Get answer (non-streaming for now)
             result = await ask_legal_question(request, payload, current_user=Depends(get_current_user))
-            
+
             yield f"data: {json.dumps({'type': 'result', 'data': result.model_dump()})}\n\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
-            
+
         except Exception as e:
             logger.error(f"Legal Q&A stream error: {e}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-    
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
@@ -361,7 +407,7 @@ async def ask_legal_question_public(
         id = "public"
         username = "public"
         role = "public"
-    
+
     return await ask_legal_question(request, payload, current_user=MockUser())
 
 

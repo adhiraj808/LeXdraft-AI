@@ -3,9 +3,10 @@ Text preprocessing for legal case descriptions.
 Handles tokenisation, normalisation, and sentence segmentation.
 """
 
-import re
 import logging
-from typing import List, Dict
+import re
+from typing import Dict, List
+
 try:
     import spacy
 except ImportError:
@@ -20,9 +21,33 @@ class LegalTextPreprocessor:
 
     # Legal abbreviations that should not be treated as sentence boundaries
     LEGAL_ABBREVIATIONS = {
-        "vs", "v", "u/s", "s", "sec", "art", "cl", "para", "sub", "no",
-        "sr", "dr", "mr", "mrs", "ms", "hon", "dist", "insp", "sgt",
-        "ipc", "cpc", "crpc", "civ", "crim", "app", "rev", "writ",
+        "vs",
+        "v",
+        "u/s",
+        "s",
+        "sec",
+        "art",
+        "cl",
+        "para",
+        "sub",
+        "no",
+        "sr",
+        "dr",
+        "mr",
+        "mrs",
+        "ms",
+        "hon",
+        "dist",
+        "insp",
+        "sgt",
+        "ipc",
+        "cpc",
+        "crpc",
+        "civ",
+        "crim",
+        "app",
+        "rev",
+        "writ",
     }
 
     def __init__(self, nlp: spacy.Language):
@@ -31,15 +56,15 @@ class LegalTextPreprocessor:
     def clean_text(self, text: str) -> str:
         """Normalise whitespace, fix encoding artifacts, standardise punctuation."""
         # Normalise whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
         # Remove non-ASCII characters except common legal symbols
-        text = re.sub(r'[^\x00-\x7F₹%@&()\[\]{}.,;:\'"!?/\\-]', ' ', text)
+        text = re.sub(r'[^\x00-\x7F₹%@&()\[\]{}.,;:\'"!?/\\-]', " ", text)
         # Normalise quotes
         text = re.sub(r'["""]', '"', text)
         text = re.sub(r"[''']", "'", text)
         # Remove extra punctuation repetitions
-        text = re.sub(r'\.{2,}', '.', text)
-        text = re.sub(r'-{2,}', ' - ', text)
+        text = re.sub(r"\.{2,}", ".", text)
+        text = re.sub(r"-{2,}", " - ", text)
         return text.strip()
 
     def segment_sentences(self, text: str, doc=None) -> List[str]:
@@ -53,7 +78,22 @@ class LegalTextPreprocessor:
         return [
             token.lemma_
             for token in doc
-            if not token.is_stop and not token.is_punct and token.is_alpha and len(token.text) > 1
+            if not token.is_stop
+            and not token.is_punct
+            and token.is_alpha
+            and len(token.text) > 1
+        ]
+
+    @staticmethod
+    def tokens_from_doc(doc) -> List[str]:
+        """Lowercased lemmas of the content words of an already-parsed Doc (no second parse)."""
+        return [
+            token.lemma_.lower()
+            for token in doc
+            if not token.is_stop
+            and not token.is_punct
+            and token.is_alpha
+            and len(token.text) > 1
         ]
 
     def extract_legal_sections(self, text: str) -> List[str]:
@@ -62,10 +102,10 @@ class LegalTextPreprocessor:
         e.g. "Section 420 IPC", "u/s 302 IPC", "Section 498A"
         """
         patterns = [
-            r'\b[Ss]ection[s]?\s+\d+[A-Za-z]?\s*(?:of\s+)?(?:IPC|CPC|CrPC|IT Act|POCSO|NDPS)?\b',
-            r'\bu/s\s+\d+[A-Za-z]?\b',
-            r'\bArt(?:icle)?\.\s*\d+\b',
-            r'\bSchedule\s+[IVX]+\b',
+            r"\b[Ss]ection[s]?\s+\d+[A-Za-z]?\s*(?:of\s+)?(?:IPC|CPC|CrPC|IT Act|POCSO|NDPS)?\b",
+            r"\bu/s\s+\d+[A-Za-z]?\b",
+            r"\bArt(?:icle)?\.\s*\d+\b",
+            r"\bSchedule\s+[IVX]+\b",
         ]
         found = []
         for pattern in patterns:
@@ -80,8 +120,12 @@ class LegalTextPreprocessor:
         `doc` may be a spaCy Doc already parsed from `clean_text(text)`, to avoid re-parsing.
         """
         cleaned = self.clean_text(text)
+        if doc is None:
+            doc = self.nlp(
+                cleaned
+            )  # parse ONCE: sentences and tokens both come from this Doc
         sentences = self.segment_sentences(cleaned, doc=doc)
-        tokens = self.tokenize(cleaned)
+        tokens = self.tokens_from_doc(doc)
         legal_sections = self.extract_legal_sections(text)
 
         return {

@@ -6,24 +6,24 @@ Input text → preprocess → NER → classify → RAG retrieve → generate dra
 import asyncio
 import logging
 from typing import Dict, Optional
+
 try:
     import spacy
 except ImportError:
     from app.nlp import mock_spacy as spacy
 
-
 from app.core.config import settings
-from app.nlp.preprocessor import LegalTextPreprocessor
-from app.nlp.ner import LegalNERExtractor
 from app.nlp.classifier import CaseClassifier
 from app.nlp.generator import LegalDraftGenerator
+from app.nlp.mock_spacy import MockNLP
+from app.nlp.ner import LegalNERExtractor
+from app.nlp.preprocessor import LegalTextPreprocessor
 from app.nlp.retriever import LegalRAGRetriever
 
 logger = logging.getLogger(__name__)
 
 
 class NLPPipeline:
-
     def __init__(self):
         self.nlp = None
         self.preprocessor = None
@@ -32,20 +32,35 @@ class NLPPipeline:
         self.generator = None
         self.retriever = None
         self._loaded = False
+        # Set when load() has finished (successfully or not) so callers can wait for it.
+        self._ready = asyncio.Event()
 
     async def load(self):
         """
         Load all components. Each heavy, synchronous load call is run in a worker
-        thread via asyncio.to_thread so the 30-60s model-loading window doesn't
-        block the event loop (which would otherwise stall startup health checks).
+        thread via asyncio.to_thread so the model-loading window doesn't block the
+        event loop (which would otherwise stall startup health checks).
         """
         logger.info("Loading NLP pipeline components...")
+        try:
+            await self._load_components()
+        except Exception:
+            logger.exception(
+                "NLP pipeline failed to load; drafting is unavailable until restart."
+            )
+        finally:
+            self._ready.set()
 
+    async def _load_components(self):
         try:
             self.nlp = await asyncio.to_thread(spacy.load, settings.SPACY_MODEL)
         except Exception as e:
-            logger.warning(f"Could not load spacy model {settings.SPACY_MODEL}: {e}. Using mock.")
-            self.nlp = spacy.MockNLP() if hasattr(spacy, 'MockNLP') else None
+            logger.warning(
+                f"Could not load spacy model {settings.SPACY_MODEL}: {e}. "
+                "Using a minimal fallback (no entity extraction) - run: python -m spacy download "
+                f"{settings.SPACY_MODEL}"
+            )
+            self.nlp = MockNLP()
 
         self.preprocessor = LegalTextPreprocessor(self.nlp)
         self.ner = LegalNERExtractor(self.nlp)
@@ -62,15 +77,30 @@ class NLPPipeline:
         except Exception as e:
             logger.warning(f"Failed to load generator: {e}")
 
-        # Load RAG retriever
+        # RAG (ChromaDB + embeddings) is heavy: it is created now but only *loaded* on
+        # first use, unless RAG_EAGER_LOAD=true.
         self.retriever = LegalRAGRetriever()
-        try:
-            await asyncio.to_thread(self.retriever.load)
-        except Exception as e:
-            logger.warning(f"Failed to load retriever: {e}")
+        if settings.ENABLE_RAG and settings.RAG_EAGER_LOAD:
+            try:
+                await asyncio.to_thread(self.retriever.ensure_loaded)
+            except Exception as e:
+                logger.warning(f"Failed to load retriever: {e}")
+        elif not settings.ENABLE_RAG:
+            logger.info("RAG disabled (ENABLE_RAG=false).")
+        else:
+            logger.info("RAG will load on first use.")
 
         self._loaded = True
         logger.info("NLP pipeline loaded (some components might be using fallbacks).")
+
+    async def wait_until_loaded(self, timeout: Optional[float] = 300.0) -> bool:
+        """Wait for load() to finish. A draft submitted right after startup waits instead of failing."""
+        if not self._ready.is_set():
+            try:
+                await asyncio.wait_for(self._ready.wait(), timeout)
+            except asyncio.TimeoutError:
+                pass
+        return self._loaded
 
     def _build_generation_context(
         self,
@@ -87,22 +117,37 @@ class NLPPipeline:
 
         return {
             "case_type": classification["case_type"],
-            "petitioner": case_input.get("petitioner_name") or (persons[0] if persons else "Petitioner"),
-            "respondent": case_input.get("respondent_name") or (persons[1] if len(persons) > 1 else "Respondent"),
-            "court": courts[0] if courts else f"Hon'ble {jurisdiction if jurisdiction != 'India' else 'High Court'}",
+            "petitioner": case_input.get("petitioner_name")
+            or (persons[0] if persons else "Petitioner"),
+            "respondent": case_input.get("respondent_name")
+            or (persons[1] if len(persons) > 1 else "Respondent"),
+            "court": courts[0]
+            if courts
+            else f"Hon'ble {jurisdiction if jurisdiction != 'India' else 'High Court'}",
             "description": preprocessed["cleaned"],
-            "statutes": entities.get("statutes", []) + preprocessed.get("legal_sections", []),
+            "statutes": entities.get("statutes", [])
+            + preprocessed.get("legal_sections", []),
             "dates": entities.get("dates", []),
-            "incident_date": case_input.get("incident_date", "the relevant date"),
+            "incident_date": case_input.get("incident_date") or "the relevant date",
             "location": locations[0] if locations else jurisdiction,
-            "relief_sought": case_input.get("relief_sought", "appropriate relief as deemed fit"),
+            "relief_sought": case_input.get("relief_sought")
+            or "appropriate relief as deemed fit",
             "money": entities.get("money", []),
             "rag_context": rag_context,
         }
 
+    def _rag_enabled(self) -> bool:
+        return bool(
+            self.retriever and settings.ENABLE_RAG and not self.retriever.unavailable
+        )
+
     def _retrieve_precedents(self, query: str, case_type: str, top_k: int) -> str:
-        """Sync helper: runs in a thread via asyncio.to_thread."""
-        precedents = self.retriever.retrieve(query=query, case_type=case_type, top_k=top_k)
+        """Sync helper: runs in a thread via asyncio.to_thread (the first call loads RAG)."""
+        if not self.retriever.ensure_loaded():
+            return ""
+        precedents = self.retriever.retrieve(
+            query=query, case_type=case_type, top_k=top_k
+        )
         if precedents:
             logger.info(f"RAG found {len(precedents)} relevant precedents.")
         else:
@@ -110,7 +155,7 @@ class NLPPipeline:
         return self.retriever.format_context(precedents)
 
     async def process(self, case_input: Dict, strict: bool = False) -> Dict:
-        if not self._loaded:
+        if not self._loaded and not await self.wait_until_loaded():
             raise RuntimeError("NLP pipeline not loaded.")
 
         text = case_input.get("case_description", "")
@@ -118,7 +163,7 @@ class NLPPipeline:
             raise ValueError("case_description is required.")
 
         # All stages below are CPU-bound and synchronous (spaCy, transformer/keyword
-        # classification, sentence-transformer encoding + ChromaDB query, generation).
+        # classification, embedding + ChromaDB query, generation).
         # They run via asyncio.to_thread so a single case being drafted doesn't stall
         # the event loop for every other concurrent request.
 
@@ -136,7 +181,7 @@ class NLPPipeline:
         # Stage 3: RAG Retrieval
         logger.info("Stage 3: Retrieving relevant legal precedents...")
         rag_context = ""
-        if self.retriever and self.retriever._loaded:
+        if self._rag_enabled():
             query = f"{classification['case_type']} {text[:500]}"
             rag_context = await asyncio.to_thread(
                 self._retrieve_precedents, query, classification["case_type"], 3
@@ -168,28 +213,39 @@ class NLPPipeline:
         classification: Dict,
         additional_context: Optional[str] = None,
     ) -> str:
-        if not self._loaded:
+        if not self._loaded and not await self.wait_until_loaded():
             raise RuntimeError("NLP pipeline not loaded.")
 
         description = case_input.get("case_description", "")
-        preprocessed = await asyncio.to_thread(self.preprocessor.preprocess, description)
+        preprocessed = await asyncio.to_thread(
+            self.preprocessor.preprocess, description
+        )
 
         # RAG retrieval for regeneration too
         rag_context = ""
-        if self.retriever and self.retriever._loaded:
+        if self._rag_enabled():
             query = f"{classification.get('case_type', '')} {description[:300]}"
             rag_context = await asyncio.to_thread(
                 self._retrieve_precedents, query, classification.get("case_type"), 2
             )
 
-        context = self._build_generation_context(case_input, preprocessed, entities, classification, rag_context)
+        context = self._build_generation_context(
+            case_input, preprocessed, entities, classification, rag_context
+        )
         if additional_context:
             context["additional_context"] = additional_context
 
-        return await asyncio.to_thread(self.generator.generate_section, section, context)
+        return await asyncio.to_thread(
+            self.generator.generate_section, section, context
+        )
 
-    def add_legal_document(self, doc_id: str, text: str, case_type: str, topic: str = ""):
-        """Add a new legal document to the RAG knowledge base."""
-        if self.retriever and self.retriever._loaded:
-            self.retriever.add_document(doc_id, text, case_type, topic)
+    def add_legal_document(
+        self, doc_id: str, text: str, case_type: str, topic: str = ""
+    ) -> bool:
+        """Add a new legal document to the RAG knowledge base (blocking). False if RAG is unavailable."""
+        if not self.retriever:
+            return False
+        added = self.retriever.add_document(doc_id, text, case_type, topic)
+        if added:
             logger.info(f"Added document {doc_id} to RAG knowledge base.")
+        return added

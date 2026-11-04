@@ -3,23 +3,17 @@ Case type classification using DistilBERT.
 Classifies legal cases into: Criminal, Civil, Family, Labour, Constitutional, Property.
 """
 
+import asyncio
 import logging
 import os
 from typing import Dict, List, Tuple
-try:
-    import torch
-    import torch.nn.functional as F
-except ImportError:
-    from app.nlp import mock_torch as torch
-    F = torch
-
-try:
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-except ImportError:
-    from app.nlp.mock_transformers import AutoTokenizer, AutoModelForSequenceClassification
-
 
 from app.core.config import settings
+
+# torch and transformers are imported lazily in CaseClassifier.load(), and only when a
+# fine-tuned checkpoint exists on disk. Importing them eagerly costs ~0.3-0.5 GB of RAM
+# (and a lot of Windows commit charge) although the keyword classifier, which is what
+# runs by default, needs neither.
 
 logger = logging.getLogger(__name__)
 
@@ -35,24 +29,106 @@ CASE_LABELS = {
 
 # Keyword-based fallback classifier (used when model is unavailable)
 KEYWORD_MAP = {
-    "Criminal": ["murder", "assault", "theft", "robbery", "fraud", "cheating", "rape",
-                 "kidnapping", "ipc", "crpc", "fir", "bail", "arrest", "accused",
-                 "offence", "crime", "police", "jail", "prison", "custody",
-                 "cheque", "dishonour", "dishonored", "bounce", "bounced",
-                 "ni act", "negotiable", "138"],
-    "Civil": ["contract", "breach", "damages", "injunction", "tort", "negligence",
-              "specific performance", "declaration", "civil suit", "plaintiff", "defendant"],
-    "Family Law": ["divorce", "matrimonial", "custody", "maintenance", "alimony",
-                   "dowry", "domestic violence", "adoption", "guardianship", "marriage"],
-    "Labour / Employment": ["termination", "dismissal", "wages", "salary", "employment",
-                            "workman", "labour", "industrial dispute", "retrenchment",
-                            "reinstatement", "pf", "gratuity", "esic"],
-    "Constitutional": ["fundamental rights", "article 14", "article 21", "writ", "mandamus",
-                       "certiorari", "habeas corpus", "prohibition", "quo warranto",
-                       "ultra vires", "constitutional validity", "state action"],
-    "Property Dispute": ["property", "land", "possession", "eviction", "tenant", "landlord",
-                         "title", "mutation", "partition", "encroachment", "trespass",
-                         "registry", "sale deed", "mortgage"],
+    "Criminal": [
+        "murder",
+        "assault",
+        "theft",
+        "robbery",
+        "fraud",
+        "cheating",
+        "rape",
+        "kidnapping",
+        "ipc",
+        "crpc",
+        "fir",
+        "bail",
+        "arrest",
+        "accused",
+        "offence",
+        "crime",
+        "police",
+        "jail",
+        "prison",
+        "custody",
+        "cheque",
+        "dishonour",
+        "dishonored",
+        "bounce",
+        "bounced",
+        "ni act",
+        "negotiable",
+        "138",
+    ],
+    "Civil": [
+        "contract",
+        "breach",
+        "damages",
+        "injunction",
+        "tort",
+        "negligence",
+        "specific performance",
+        "declaration",
+        "civil suit",
+        "plaintiff",
+        "defendant",
+    ],
+    "Family Law": [
+        "divorce",
+        "matrimonial",
+        "custody",
+        "maintenance",
+        "alimony",
+        "dowry",
+        "domestic violence",
+        "adoption",
+        "guardianship",
+        "marriage",
+    ],
+    "Labour / Employment": [
+        "termination",
+        "dismissal",
+        "wages",
+        "salary",
+        "employment",
+        "workman",
+        "labour",
+        "industrial dispute",
+        "retrenchment",
+        "reinstatement",
+        "pf",
+        "gratuity",
+        "esic",
+    ],
+    "Constitutional": [
+        "fundamental rights",
+        "article 14",
+        "article 21",
+        "writ",
+        "mandamus",
+        "certiorari",
+        "habeas corpus",
+        "prohibition",
+        "quo warranto",
+        "ultra vires",
+        "constitutional validity",
+        "state action",
+    ],
+    "Property Dispute": [
+        "property",
+        "land",
+        "possession",
+        "eviction",
+        "tenant",
+        "landlord",
+        "title",
+        "mutation",
+        "partition",
+        "encroachment",
+        "trespass",
+        "registry",
+        "sale deed",
+        "mortgage",
+    ],
 }
 
 
@@ -66,6 +142,8 @@ class CaseClassifier:
         self.tokenizer = None
         self.model = None
         self.use_model = False
+        self._torch = None
+        self._F = None
 
     async def load(self):
         """
@@ -75,16 +153,31 @@ class CaseClassifier:
         checkpoint (produced by app/nlp/training/train_classifier.py), the keyword
         classifier remains the active method.
         """
-        checkpoint_dir = settings.CLASSIFIER_MODEL_PATH
-        if not os.path.isdir(checkpoint_dir) or not os.path.exists(os.path.join(checkpoint_dir, "config.json")):
-            logger.info(f"No fine-tuned classifier checkpoint at {checkpoint_dir}. Using keyword classifier.")
+        checkpoint_dir = settings.resolve_backend_path(settings.CLASSIFIER_MODEL_PATH)
+        if not os.path.isdir(checkpoint_dir) or not os.path.exists(
+            os.path.join(checkpoint_dir, "config.json")
+        ):
+            logger.info(
+                f"No fine-tuned classifier checkpoint at {checkpoint_dir}. Using keyword classifier."
+            )
             self.use_model = False
             return
 
         try:
             logger.info(f"Loading fine-tuned classifier checkpoint: {checkpoint_dir}")
-            self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
-            self.model = AutoModelForSequenceClassification.from_pretrained(checkpoint_dir)
+            # Heavy imports happen here, off the event loop, and only because a checkpoint exists.
+            import torch
+            import torch.nn.functional as F
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+            def _load():
+                tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    checkpoint_dir
+                )
+                return tokenizer, model
+
+            self.tokenizer, self.model = await asyncio.to_thread(_load)
             if self.model.config.num_labels != len(CASE_LABELS):
                 raise ValueError(
                     f"Checkpoint has {self.model.config.num_labels} labels, expected {len(CASE_LABELS)}"
@@ -92,10 +185,14 @@ class CaseClassifier:
             self.model.eval()
             if settings.USE_GPU and torch.cuda.is_available():
                 self.model = self.model.cuda()
+            self._torch, self._F = torch, F
             self.use_model = True
             logger.info("Fine-tuned classifier model loaded.")
         except Exception as e:
-            logger.warning(f"Could not load classifier checkpoint ({e}). Using keyword fallback.")
+            logger.warning(
+                f"Could not load classifier checkpoint ({e}). Using keyword fallback."
+            )
+            self.tokenizer = self.model = self._torch = self._F = None
             self.use_model = False
 
     def _keyword_classify(self, text: str) -> Tuple[str, float]:
@@ -122,7 +219,8 @@ class CaseClassifier:
         confident one wins (protects against a weak model on odd texts).
         """
         kw_label, kw_conf = self._keyword_classify(text)
-        if self.use_model and self.tokenizer and self.model:
+        if self.use_model and self.tokenizer and self.model and self._torch is not None:
+            torch, F = self._torch, self._F
             try:
                 inputs = self.tokenizer(
                     text,
@@ -158,7 +256,9 @@ class CaseClassifier:
                     f"({label} {confidence}); using keyword."
                 )
             except Exception as e:
-                logger.warning(f"Model inference failed: {e}. Falling back to keywords.")
+                logger.warning(
+                    f"Model inference failed: {e}. Falling back to keywords."
+                )
 
         # Keyword fallback
         return {
