@@ -2,14 +2,15 @@
 
 Access: only users with role == "admin" (403 otherwise).
 """
-import logging
-from datetime import datetime
-from typing import List, Optional
-import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from pydantic import BaseModel
-from sqlalchemy import func, select
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -22,6 +23,8 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+MAX_MODELS = 50
+
 
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != "admin":
@@ -32,7 +35,7 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 def audit_log(admin_user: User, action: str, target: str, details: dict = None):
     """Log admin actions for audit trail."""
     audit_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": str(uuid.uuid4())[:8],
         "admin_id": admin_user.id,
         "admin_username": admin_user.username,
@@ -45,6 +48,7 @@ def audit_log(admin_user: User, action: str, target: str, details: dict = None):
 
 
 # ---------- Pydantic Models ----------
+
 
 class AdminUserItem(BaseModel):
     id: str
@@ -80,9 +84,9 @@ class RoleUpdate(BaseModel):
 
 
 class ModelAdd(BaseModel):
-    id: str
-    label: str
-    provider: str
+    id: str = Field(min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_.:-]+$")
+    label: str = Field(min_length=1, max_length=100)
+    provider: str = Field(min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_.-]+$")
 
 
 class AdminStatusResponse(BaseModel):
@@ -93,16 +97,16 @@ class AdminStatusResponse(BaseModel):
 
 
 class BlockUserRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(min_length=1, max_length=64)
     remove_data: bool = False
 
 
 class UnblockUserRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(min_length=1, max_length=64)
 
 
 class DeleteUserDataRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(min_length=1, max_length=64)
 
 
 class ToggleLLMResponse(BaseModel):
@@ -110,7 +114,7 @@ class ToggleLLMResponse(BaseModel):
 
 
 class SetModelRequest(BaseModel):
-    model: str
+    model: str = Field(min_length=1, max_length=50)
 
 
 class SetModelResponse(BaseModel):
@@ -127,16 +131,7 @@ class ModelsResponse(BaseModel):
     models: List[dict]
 
 
-# ---------- Admin Auth Dependency ----------
-
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return current_user
-
-
 # ---------- Global AI State (in-memory, resets on restart) ----------
-# These mirror the friend's project simple in-memory approach
 LLM_ENABLED = True
 CURRENT_MODEL = getattr(settings, "MODEL_PROVIDER", "groq") or "groq"
 
@@ -148,7 +143,51 @@ AVAILABLE_MODELS = [
 ]
 
 
+# ---------- Helpers ----------
+
+
+async def _get_user_or_404(db: AsyncSession, user_id: str) -> User:
+    user = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+async def _delete_user_cases(db: AsyncSession, user_id: str) -> List[str]:
+    """Delete every case (and its draft) of a user with bulk statements.
+
+    Returns the deleted case ids so the caller can clear their cache entries once the
+    transaction has been committed.
+    """
+    case_ids = list(
+        (await db.execute(select(Case.id).where(Case.user_id == user_id)))
+        .scalars()
+        .all()
+    )
+    if case_ids:
+        keep_session_state = {"synchronize_session": False}
+        await db.execute(
+            delete(Draft)
+            .where(Draft.case_id.in_(select(Case.id).where(Case.user_id == user_id)))
+            .execution_options(**keep_session_state)
+        )
+        await db.execute(
+            delete(Case)
+            .where(Case.user_id == user_id)
+            .execution_options(**keep_session_state)
+        )
+    return case_ids
+
+
+async def _forget_cached_cases(case_ids: List[str]) -> None:
+    for case_id in case_ids:
+        await delete_case_cache(case_id)  # best-effort helper: never raises
+
+
 # ---------- Admin Routes ----------
+
 
 @router.get("/users", response_model=List[AdminUserItem])
 async def admin_list_users(
@@ -157,14 +196,21 @@ async def admin_list_users(
 ):
     users = (await db.execute(select(User).order_by(User.created_at))).scalars().all()
     counts = dict(
-        (await db.execute(
-            select(Case.user_id, func.count(Case.id)).group_by(Case.user_id)
-        )).all()
+        (
+            await db.execute(
+                select(Case.user_id, func.count(Case.id)).group_by(Case.user_id)
+            )
+        ).all()
     )
     return [
         AdminUserItem(
-            id=u.id, email=u.email, username=u.username, full_name=u.full_name,
-            role=u.role, is_active=u.is_active, created_at=u.created_at,
+            id=u.id,
+            email=u.email,
+            username=u.username,
+            full_name=u.full_name,
+            role=u.role,
+            is_active=u.is_active,
+            created_at=u.created_at,
             case_count=counts.get(u.id, 0),
         )
         for u in users
@@ -183,17 +229,29 @@ async def admin_set_role(
         raise HTTPException(status_code=400, detail="role must be admin or advocate")
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await _get_user_or_404(db, user_id)
     old_role = user.role
     user.role = payload.role
     await db.commit()
     await db.refresh(user)
-    audit_log(admin, "update_user_role", "user", {"user_id": user_id, "old_role": old_role, "new_role": payload.role})
+    case_count = (
+        await db.execute(select(func.count(Case.id)).where(Case.user_id == user.id))
+    ).scalar_one()
+    audit_log(
+        admin,
+        "update_user_role",
+        "user",
+        {"user_id": user_id, "old_role": old_role, "new_role": payload.role},
+    )
     return AdminUserItem(
-        id=user.id, email=user.email, username=user.username, full_name=user.full_name,
-        role=user.role, is_active=user.is_active, created_at=user.created_at, case_count=0,
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        case_count=case_count,
     )
 
 
@@ -206,25 +264,29 @@ async def admin_delete_user(
 ):
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    cases = (await db.execute(select(Case).where(Case.user_id == user_id))).scalars().all()
-    for case in cases:
-        draft = (await db.execute(select(Draft).where(Draft.case_id == case.id))).scalar_one_or_none()
-        if draft:
-            await db.delete(draft)
-        await db.delete(case)
-    await db.delete(user)
+    user = await _get_user_or_404(db, user_id)
+    email = user.email
+    case_ids = await _delete_user_cases(db, user_id)
+    await db.execute(
+        delete(User)
+        .where(User.id == user_id)
+        .execution_options(synchronize_session=False)
+    )
     await db.commit()
-    audit_log(admin, "delete_user", "user", {"user_id": user_id, "email": user.email})
+    await _forget_cached_cases(case_ids)
+    audit_log(
+        admin,
+        "delete_user",
+        "user",
+        {"user_id": user_id, "email": email, "cases_deleted": len(case_ids)},
+    )
     return None
 
 
 @router.get("/cases", response_model=List[AdminCaseItem])
 async def admin_list_cases(
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -240,9 +302,15 @@ async def admin_list_cases(
     ).all()
     return [
         AdminCaseItem(
-            id=case.id, title=case.title, case_type=case.case_type, status=case.status,
-            user_id=case.user_id, user_email=email or "", has_draft=draft_id is not None,
-            model_used=model_used, created_at=case.created_at,
+            id=case.id,
+            title=case.title,
+            case_type=case.case_type,
+            status=case.status,
+            user_id=case.user_id,
+            user_email=email or "",
+            has_draft=draft_id is not None,
+            model_used=model_used,
+            created_at=case.created_at,
         )
         for case, email, draft_id, model_used in rows
     ]
@@ -254,15 +322,24 @@ async def admin_delete_case(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
-    if not case:
+    owner_id = (
+        await db.execute(select(Case.user_id).where(Case.id == case_id))
+    ).scalar_one_or_none()
+    if owner_id is None:
         raise HTTPException(status_code=404, detail="Case not found")
-    draft = (await db.execute(select(Draft).where(Draft.case_id == case_id))).scalar_one_or_none()
-    if draft:
-        await db.delete(draft)
-    await db.delete(case)
+    await db.execute(
+        delete(Draft)
+        .where(Draft.case_id == case_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(
+        delete(Case)
+        .where(Case.id == case_id)
+        .execution_options(synchronize_session=False)
+    )
     await db.commit()
-    audit_log(admin, "delete_user", "user", {"user_id": user_id, "email": user.email})
+    await delete_case_cache(case_id)
+    audit_log(admin, "delete_case", "case", {"case_id": case_id, "owner_id": owner_id})
     return None
 
 
@@ -275,29 +352,49 @@ async def admin_reprocess_case(
     admin: User = Depends(require_admin),
 ):
     """Reset a stuck/failed case to pending and queue it for processing again."""
-    from app.api.routes.cases import _process_case_background
+    from app.api.routes.cases import _process_case_background, get_nlp
 
-    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    case = (
+        await db.execute(select(Case).where(Case.id == case_id))
+    ).scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
+    nlp = get_nlp(request)
     case.status = "pending"
     await db.commit()
-    nlp = request.app.state.nlp_pipeline
     background_tasks.add_task(_process_case_background, case.id, nlp)
-    logger.info(f"Admin {admin.username} queued reprocess for case {case_id}")
-    return {"id": case.id, "status": "pending", "message": "Case queued for processing again."}
+    audit_log(admin, "reprocess_case", "case", {"case_id": case_id})
+    return {
+        "id": case.id,
+        "status": "pending",
+        "message": "Case queued for processing again.",
+    }
 
 
-# ---------- AI Configuration Routes (Friend's Project Style) ----------
+# ---------- AI Configuration Routes ----------
+
 
 @router.get("/status", response_model=AdminStatusResponse)
-async def admin_status(admin: User = Depends(require_admin)):
+async def admin_status(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
     """Get current AI configuration status."""
-    global LLM_ENABLED, CURRENT_MODEL, AVAILABLE_MODELS
+    blocked = (
+        (
+            await db.execute(
+                select(User.username)
+                .where(User.is_active.is_(False))
+                .order_by(User.username)
+            )
+        )
+        .scalars()
+        .all()
+    )
     return AdminStatusResponse(
         enabled=LLM_ENABLED,
         model=CURRENT_MODEL,
-        blocked_users=[],  # Could add blocked_users table later
+        blocked_users=list(blocked),
         models=AVAILABLE_MODELS,
     )
 
@@ -319,9 +416,11 @@ async def admin_set_model(
     admin: User = Depends(require_admin),
 ):
     """Set the default AI model for draft generation."""
-    global CURRENT_MODEL, AVAILABLE_MODELS
+    global CURRENT_MODEL
     if not any(m["id"] == payload.model for m in AVAILABLE_MODELS):
-        raise HTTPException(status_code=400, detail=f"Model {payload.model} not in available models")
+        raise HTTPException(
+            status_code=400, detail=f"Model {payload.model} not in available models"
+        )
     CURRENT_MODEL = payload.model
     audit_log(admin, "set_model", "system", {"model": CURRENT_MODEL})
     logger.info(f"Admin set default model to: {CURRENT_MODEL}")
@@ -335,18 +434,30 @@ async def admin_add_model(
     admin: User = Depends(require_admin),
 ):
     """Add a new model to the available models list."""
-    global AVAILABLE_MODELS
     if any(m["id"] == payload.id for m in AVAILABLE_MODELS):
-        raise HTTPException(status_code=400, detail=f"Model with id {payload.id} already exists")
-    AVAILABLE_MODELS.append({"id": payload.id, "label": payload.label, "provider": payload.provider})
-    audit_log(admin, "add_model", "system", {"model_id": payload.id, "label": payload.label, "provider": payload.provider})
+        raise HTTPException(
+            status_code=400, detail=f"Model with id {payload.id} already exists"
+        )
+    if len(AVAILABLE_MODELS) >= MAX_MODELS:
+        raise HTTPException(
+            status_code=400, detail=f"At most {MAX_MODELS} models can be registered"
+        )
+    AVAILABLE_MODELS.append(
+        {"id": payload.id, "label": payload.label, "provider": payload.provider}
+    )
+    audit_log(
+        admin,
+        "add_model",
+        "system",
+        {"model_id": payload.id, "label": payload.label, "provider": payload.provider},
+    )
     logger.info(f"Admin added model: {payload.id} ({payload.label})")
     return AddModelResponse(success=True, models=AVAILABLE_MODELS)
 
 
 @router.get("/models", response_model=ModelsResponse)
 async def admin_get_models(admin: User = Depends(require_admin)):
-    """Get all available models (public endpoint for frontend dropdown)."""
+    """Get all available models."""
     return ModelsResponse(success=True, models=AVAILABLE_MODELS)
 
 
@@ -360,7 +471,9 @@ async def admin_delete_model(
     # Prevent deletion of core models
     core_models = {"groq", "hf", "local", "template"}
     if model_id in core_models:
-        raise HTTPException(status_code=400, detail=f"Cannot delete core model: {model_id}")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot delete core model: {model_id}"
+        )
     if not any(m["id"] == model_id for m in AVAILABLE_MODELS):
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
     AVAILABLE_MODELS = [m for m in AVAILABLE_MODELS if m["id"] != model_id]
@@ -369,48 +482,79 @@ async def admin_delete_model(
     return {"success": True, "models": AVAILABLE_MODELS}
 
 
-# ---------- User Management (Friend's Project Style) ----------
+# ---------- User Management ----------
+
 
 @router.post("/block-user")
 async def admin_block_user(
     request: Request,
     payload: BlockUserRequest,
+    db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    """Block a user and optionally delete their data."""
-    # For now, just return success - could add blocked_users table later
-    audit_log(admin, "block_user", "user", {"user_id": payload.user_id, "remove_data": payload.remove_data})
-    logger.info(f"Admin blocked user: {payload.user_id}, remove_data={payload.remove_data}")
-    return {"success": True, "message": f"User {payload.user_id} blocked"}
+    """Deactivate a user (their token stops working immediately) and optionally delete their data."""
+    if payload.user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot block yourself")
+    user = await _get_user_or_404(db, payload.user_id)
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=400, detail="Cannot block an admin; remove the admin role first"
+        )
+    user.is_active = False
+    case_ids: List[str] = []
+    if payload.remove_data:
+        case_ids = await _delete_user_cases(db, user.id)
+    await db.commit()
+    await _forget_cached_cases(case_ids)
+    audit_log(
+        admin,
+        "block_user",
+        "user",
+        {"user_id": payload.user_id, "remove_data": payload.remove_data},
+    )
+    return {"success": True, "message": f"User {user.username} blocked"}
 
 
 @router.post("/unblock-user")
 async def admin_unblock_user(
     request: Request,
     payload: UnblockUserRequest,
+    db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    """Unblock a user."""
+    """Re-activate a blocked user."""
+    user = await _get_user_or_404(db, payload.user_id)
+    user.is_active = True
+    await db.commit()
     audit_log(admin, "unblock_user", "user", {"user_id": payload.user_id})
-    logger.info(f"Admin unblocked user: {payload.user_id}")
-    return {"success": True, "message": f"User {payload.user_id} unblocked"}
+    return {"success": True, "message": f"User {user.username} unblocked"}
 
 
 @router.post("/delete-user-data")
 async def admin_delete_user_data(
     request: Request,
     payload: DeleteUserDataRequest,
+    db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    """Delete all data for a user (messages, cases, drafts)."""
-    # This would need a db session - for now return success
-    audit_log(admin, "delete_user_data", "user", {"user_id": payload.user_id})
-    logger.info(f"Admin deleted data for user: {payload.user_id}")
-    return {"success": True, "message": f"Data for user {payload.user_id} deleted"}
+    """Delete all cases and drafts of a user (the account itself is kept)."""
+    user = await _get_user_or_404(db, payload.user_id)
+    case_ids = await _delete_user_cases(db, user.id)
+    await db.commit()
+    await _forget_cached_cases(case_ids)
+    audit_log(
+        admin,
+        "delete_user_data",
+        "user",
+        {"user_id": payload.user_id, "cases_deleted": len(case_ids)},
+    )
+    return {
+        "success": True,
+        "message": f"Deleted {len(case_ids)} case(s) of {user.username}",
+    }
 
 
 @router.get("/models-public", response_model=ModelsResponse)
-@router.get("/admin/models-public", response_model=ModelsResponse)
 async def get_models_public():
     """Public endpoint for frontend to fetch available models."""
     return ModelsResponse(success=True, models=AVAILABLE_MODELS)

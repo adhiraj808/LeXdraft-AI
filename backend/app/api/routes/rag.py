@@ -1,19 +1,22 @@
 """API routes for managing the RAG knowledge base."""
 
-from fastapi import APIRouter, Depends, Request, HTTPException, status
-from pydantic import BaseModel
-from typing import Optional
+import asyncio
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+
 from app.core.security import get_current_user
 from app.models.user import User
-import uuid
 
 router = APIRouter()
 
 
 class DocumentAdd(BaseModel):
-    text: str
-    case_type: str
-    topic: Optional[str] = ""
+    # Bounded: each document is embedded in memory and written to the vector store.
+    text: str = Field(min_length=50, max_length=50_000)
+    case_type: str = Field(min_length=2, max_length=100)
+    topic: str = Field(default="", max_length=300)
 
 
 @router.post("/add-document")
@@ -28,22 +31,34 @@ async def add_document(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only administrators can add documents to the knowledge base",
         )
-    nlp = request.app.state.nlp_pipeline
+    nlp = getattr(request.app.state, "nlp_pipeline", None)
+    if nlp is None:
+        raise HTTPException(
+            status_code=503, detail="AI pipeline is not initialised yet"
+        )
+
     doc_id = f"user_{current_user.id[:8]}_{str(uuid.uuid4())[:8]}"
-    nlp.add_legal_document(
+    # Embedding the text is CPU-bound (and the first call loads the model): keep it off the event loop.
+    added = await asyncio.to_thread(
+        nlp.add_legal_document,
         doc_id=doc_id,
         text=payload.text,
         case_type=payload.case_type,
         topic=payload.topic,
     )
+    if not added:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RAG is not available (optional packages missing or ENABLE_RAG=false). "
+            "Install them with: pip install -r requirements-ml.txt",
+        )
     return {"message": "Document added to knowledge base", "doc_id": doc_id}
 
 
 @router.get("/status")
 async def rag_status(request: Request, current_user: User = Depends(get_current_user)):
-    """Check RAG status and document count."""
-    nlp = request.app.state.nlp_pipeline
-    if nlp.retriever and nlp.retriever._loaded:
-        count = nlp.retriever.collection.count()
-        return {"status": "active", "documents_in_db": count}
-    return {"status": "inactive", "documents_in_db": 0}
+    """Check RAG status and document count (never triggers the lazy model load)."""
+    nlp = getattr(request.app.state, "nlp_pipeline", None)
+    if nlp is None or nlp.retriever is None:
+        return {"status": "inactive", "documents_in_db": 0}
+    return nlp.retriever.status()

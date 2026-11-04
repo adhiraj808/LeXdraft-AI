@@ -37,15 +37,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy pre-compiled wheels from builder
 COPY --from=builder /wheels /wheels
 
-# Install Python packages from pre-compiled wheels
+# Install Python packages from pre-compiled wheels.
+# gunicorn is installed explicitly (see backend/Dockerfile): the production CMD
+# needs it, but requirements.txt does not pin it.
 COPY requirements-base.txt requirements-ml.txt ./
 RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements-base.txt -r requirements-ml.txt && \
+    pip install --no-cache-dir "gunicorn>=22.0" && \
     rm -rf /wheels
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 # Download spaCy model
 RUN python -m spacy download en_core_web_sm
 
-# Copy application code
+# Copy application code (alembic.ini lives here; init_db needs it)
 COPY . .
 
 # Create non-root user
@@ -55,7 +60,8 @@ USER appuser
 
 EXPOSE 8000
 
+# Liveness, not readiness (see backend/Dockerfile).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/live')" || exit 1
 
-CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:8000"]
+CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "1", "--bind", "0.0.0.0:8000"]

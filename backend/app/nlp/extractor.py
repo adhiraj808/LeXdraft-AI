@@ -1,7 +1,9 @@
 """Prompt -> structured case fields via Groq LLM."""
+
 import json
 import logging
 import re
+import threading
 import time
 from typing import Dict, Optional
 
@@ -27,15 +29,54 @@ Respond with ONLY a valid JSON object, no markdown, no explanation.
 User text:
 """
 
+_http: Optional[httpx.Client] = None
+_http_lock = threading.Lock()
+
+
+def _client() -> httpx.Client:
+    """One pooled client for all extraction calls (keep-alive instead of a new TLS handshake each time)."""
+    global _http
+    with _http_lock:
+        if _http is None:
+            _http = httpx.Client(
+                timeout=httpx.Timeout(90.0, connect=10.0),
+                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            )
+        return _http
+
+
+def _parse_json_object(text: str) -> Optional[Dict]:
+    """Parse a JSON object from model output, tolerating markdown fences and surrounding prose."""
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    candidates = [text]
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
 
 def extract_case_fields(prompt: str) -> Optional[Dict]:
-    """Extract structured fields from a free prompt. None on any failure."""
+    """Extract structured fields from a free prompt. None on any failure.
+
+    Blocking (network + retry sleeps): call it with ``asyncio.to_thread``.
+    """
     if not settings.GROQ_API_KEY:
         return None
     payload = {
         "model": settings.GROQ_MODEL,
         "messages": [
-            {"role": "system", "content": "You extract structured legal case data. Output only JSON."},
+            {
+                "role": "system",
+                "content": "You extract structured legal case data. Output only JSON.",
+            },
             {"role": "user", "content": EXTRACT_PROMPT + prompt},
         ],
         "temperature": 0.2,
@@ -44,38 +85,23 @@ def extract_case_fields(prompt: str) -> Optional[Dict]:
     delays = [3, 8, 20]
     for attempt in range(4):
         try:
-            with httpx.Client(timeout=90.0) as client:
-                resp = client.post(
-                    GROQ_API_URL,
-                    headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
-                    json=payload,
-                )
+            resp = _client().post(
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+                json=payload,
+            )
             if resp.status_code == 200:
                 msg = resp.json()["choices"][0]["message"]
-                # Handle gpt-oss-120b which may return content in "reasoning" field
-                text = msg.get("content", "").strip()
-                if not text:
-                    text = msg.get("reasoning", "").strip()
-                # Strip markdown fences (```json ... ```) if present.
-                text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-                text = re.sub(r"\s*```$", "", text)
-                data = None
-                try:
-                    parsed = json.loads(text)
-                    if isinstance(parsed, dict):
-                        data = parsed
-                except Exception:
-                    m = re.search(r"\{.*\}", text, re.DOTALL)
-                    if m:
-                        try:
-                            parsed = json.loads(m.group(0))
-                            if isinstance(parsed, dict):
-                                data = parsed
-                        except Exception:
-                            data = None
+                # Some reasoning models (e.g. gpt-oss) may put the answer in "reasoning".
+                # That is acceptable HERE only because the text must parse as the expected JSON.
+                data = _parse_json_object(
+                    msg.get("content") or ""
+                ) or _parse_json_object(msg.get("reasoning") or "")
                 if data and data.get("case_description"):
                     return data
-                logger.warning("Groq extraction returned unparseable JSON, falling back.")
+                logger.warning(
+                    "Groq extraction returned unparseable JSON, falling back."
+                )
                 return None
             if resp.status_code in (429, 500, 502, 503) and attempt < 3:
                 # On 429 (rate limit), fail fast since daily limit won't recover quickly
@@ -83,17 +109,25 @@ def extract_case_fields(prompt: str) -> Optional[Dict]:
                     logger.warning("Groq extraction rate limited, failing fast")
                     return None
                 wait = resp.headers.get("retry-after")
-                wait_s = float(wait) if wait and str(wait).replace(".", "", 1).isdigit() else delays[attempt]
+                wait_s = (
+                    float(wait)
+                    if wait and str(wait).replace(".", "", 1).isdigit()
+                    else delays[attempt]
+                )
                 wait_s = min(wait_s, 30.0)
-                logger.info(f"Groq extraction status {resp.status_code}, retrying in {wait_s}s...")
+                logger.info(
+                    f"Groq extraction status {resp.status_code}, retrying in {wait_s}s..."
+                )
                 time.sleep(wait_s)
                 continue
             logger.warning(f"Groq extraction status {resp.status_code}, falling back.")
             return None
-        except Exception:
+        except Exception as e:
             if attempt < 3:
                 time.sleep(delays[attempt])
                 continue
-            logger.warning("Groq extraction failed repeatedly, falling back.")
+            logger.warning(
+                f"Groq extraction failed repeatedly ({type(e).__name__}), falling back."
+            )
             return None
     return None
