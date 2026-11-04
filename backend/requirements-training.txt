@@ -12,6 +12,6 @@ tokenizers>=0.19.1
 sentencepiece>=0.2.0
 accelerate>=0.30.0
 huggingface-hub>=0.23.2
-sentence-transformers>=3.0.1
+sentence-transformers>=6.2.0
 pandas>=2.0
 scikit-learn>=1.3
