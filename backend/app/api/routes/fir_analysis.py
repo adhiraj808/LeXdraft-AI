@@ -10,9 +10,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.core.security import get_current_user
 from app.models.user import User
-from app.core.rate_limit import public_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,7 +25,8 @@ def get_nlp(request: Request):
 
 class LegalQuestionRequest(BaseModel):
     question: str = Field(..., min_length=5, max_length=5000, description="Legal question from user")
-    language: str = Field(default="english", pattern="^(english|hindi)$")
+    # Empty string = auto-detect (Devanagari script -> Hindi, otherwise English).
+    language: str = Field(default="", pattern="^(english|hindi|)$")
     context: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("question")
@@ -351,6 +353,7 @@ async def ask_legal_question(
 
 
 @router.post("/ask-stream")
+@limiter.limit(settings.RATE_LIMIT_QA)
 async def ask_legal_question_stream(
     request: Request,
     payload: LegalQuestionRequest,
@@ -381,34 +384,35 @@ async def ask_legal_question_stream(
             yield f"data: {json.dumps({'type': 'progress', 'message': 'Preparing answer...'})}\n\n"
             await asyncio.sleep(0.5)
 
-            # Get answer (non-streaming for now)
-            result = await ask_legal_question(request, payload, current_user=Depends(get_current_user))
+            # Get answer (non-streaming for now): use the shared implementation
+            # directly. (Calling the ask_legal_question endpoint function with
+            # current_user=Depends(...) would pass a Depends object, not a user.)
+            result = await _answer_question(request, payload)
 
             yield f"data: {json.dumps({'type': 'result', 'data': result.model_dump()})}\n\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
         except Exception as e:
-            logger.error(f"Legal Q&A stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            # Never echo exception text to the client: it can contain internal
+            # endpoint URLs, provider details or stack fragments.
+            logger.error(f"Legal Q&A stream error: {type(e).__name__}: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Something went wrong while preparing your answer. Please try again.'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# Public endpoint (no auth) - with generous rate limit
+# Anonymous legal Q&A spends LLM credits for anyone who can reach the server.
+# It is disabled unless PUBLIC_QA_ENABLED=true (see app.core.config).
 @router.post("/ask-public")
-@public_limiter.limit("20/minute")
+@limiter.limit(settings.RATE_LIMIT_PUBLIC_QA)
 async def ask_legal_question_public(
     request: Request,
     payload: LegalQuestionRequest,
 ):
-    """Public legal Q&A - no auth, generous rate limit."""
-    # Reuse logic but with mock user
-    class MockUser:
-        id = "public"
-        username = "public"
-        role = "public"
-
-    return await ask_legal_question(request, payload, current_user=MockUser())
+    """Public legal Q&A - no auth, off by default."""
+    if not settings.PUBLIC_QA_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _answer_question(request, payload)
 
 
 # Rate limit status endpoint

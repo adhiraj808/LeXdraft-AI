@@ -26,7 +26,7 @@ async def test_register_new_user(db_session):
 async def test_register_duplicate_user(db_session):
     from fastapi import HTTPException
     service = AuthService(db_session)
-    payload = UserCreate(email="dup@example.com", username="dupuser", password="pass123")
+    payload = UserCreate(email="dup@example.com", username="dupuser", password="pass1234")
     await service.register(payload)
 
     with pytest.raises(HTTPException) as exc:

@@ -9,11 +9,13 @@
 # =============================================================================
 
 # ---- Stage 1: Builder ----
+# A venv keeps the runtime layer free of build tooling, and --mount=type=cache
+# makes rebuilds after a code-only change instant instead of re-downloading
+# every wheel.
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -21,36 +23,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python build dependencies and compile wheels (base only)
 COPY requirements-base.txt ./
-RUN pip install --no-cache-dir --upgrade pip wheel setuptools && \
-    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements-base.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip wheel setuptools && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements-base.txt
 
 # ---- Stage 2: Runtime ----
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Install only runtime system dependencies
+# libpq5 is NOT needed: psycopg2-binary ships its own libpq.
+# libgomp1 is needed by numpy/blis/thinc (spaCy).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-compiled wheels from builder
-COPY --from=builder /wheels /wheels
-
-# Install Python packages from pre-compiled wheels.
-# gunicorn is installed explicitly: requirements.txt (and thus requirements-base.txt)
-# does not pin it, but the production CMD below needs it. Without this line the
-# container exits immediately with "executable file not found: gunicorn".
-COPY requirements-base.txt ./
-RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements-base.txt && \
-    pip install --no-cache-dir "gunicorn>=22.0" && \
-    rm -rf /wheels
+# The venv (with every wheel already installed) replaces the old
+# "COPY /wheels; pip install; rm -rf /wheels" dance, which kept the wheels in
+# the image twice because deleting them in a later layer does not shrink it.
+COPY --from=builder /opt/venv /opt/venv
 
 # Keep memory low: disable bytecode writing for a read-only-ish runtime.
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    VIRTUAL_ENV=/opt/venv
 
 # Download spaCy model
 RUN python -m spacy download en_core_web_sm
@@ -58,9 +56,12 @@ RUN python -m spacy download en_core_web_sm
 # Copy application code (alembic.ini lives here; init_db needs it)
 COPY . .
 
-# Create non-root user
-RUN useradd --create-home --uid 1000 appuser && \
-    chown -R appuser:appuser /app
+# Create non-root user. /app/.cache must exist and be owned by appuser BEFORE
+# the model_cache volume is mounted, otherwise Docker creates it as root and
+# the app cannot write model downloads to it.
+RUN mkdir -p /app/.cache && \
+    useradd --create-home --uid 1000 appuser && \
+    chown -R appuser:appuser /app/.cache
 USER appuser
 
 EXPOSE 8000

@@ -1,0 +1,17 @@
+# Training-only dependencies — never needed at runtime.
+# Used by app/nlp/training/train_classifier.py and train_ner.py.
+# Install with:  pip install -r requirements.txt -r requirements-training.txt
+#
+# For CPU-only training, prefer the CPU wheel:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# (the default PyPI wheel pulls the multi-GB CUDA build).
+
+torch>=2.3.0
+transformers>=4.41.1
+tokenizers>=0.19.1
+sentencepiece>=0.2.0
+accelerate>=0.30.0
+huggingface-hub>=0.23.2
+sentence-transformers>=3.0.1
+pandas>=2.0
+scikit-learn>=1.3

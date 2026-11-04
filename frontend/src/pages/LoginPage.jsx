@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
 import toast from 'react-hot-toast'
+import { getErrorMessage } from '../services/api'
 import { Sun, Moon, Scale, Mail, Lock, ArrowRight, Shield, Award, Zap, FileCheck } from 'lucide-react'
 import GoogleSignInButton from '../components/GoogleSignInButton'
 
@@ -22,7 +23,7 @@ export default function LoginPage() {
       toast.success('Welcome back, Counselor', { id: loadToast })
       navigate('/dashboard')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Authentication Failed', { id: loadToast })
+      toast.error(getErrorMessage(err, 'Authentication Failed'), { id: loadToast })
     } finally {
       setLoading(false)
     }

@@ -63,6 +63,13 @@ export function useCaseDetail(caseId) {
     try {
       toast.loading(`Regenerating ${section}...`, { id: 'regen' })
       const { data } = await casesAPI.regenerate(caseId, section, additionalContext)
+      // "all" is queued in the background: the response is only a status, the
+      // draft arrives later. Just refetch - the poller will refresh the view.
+      if (section === 'all') {
+        toast.success('Regeneration queued', { id: 'regen' })
+        fetch()
+        return
+      }
       setCaseData(prev => prev ? {
         ...prev,
         draft: prev.draft ? {
@@ -79,13 +86,22 @@ export function useCaseDetail(caseId) {
   const exportPdf = async () => {
     try {
       toast.loading('Generating PDF...', { id: 'pdf' })
-      const { data } = await casesAPI.exportPdf(caseId)
-      const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
+      const resp = await casesAPI.exportPdf(caseId)
+      // The backend falls back to HTML when ReportLab fails: download that as a
+      // .html file instead of a broken "PDF".
+      const contentType = resp.headers?.['content-type'] || ''
+      const isPdf = !contentType.includes('html')
+      const type = isPdf ? 'application/pdf' : 'text/html'
+      const filename = `legal_draft_${caseId.slice(0, 8)}${isPdf ? '.pdf' : '.html'}`
+      const url = URL.createObjectURL(new Blob([resp.data], { type }))
       const a = document.createElement('a')
       a.href = url
-      a.download = `legal_draft_${caseId.slice(0, 8)}.pdf`
+      a.download = filename
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      a.remove()
+      // Revoking immediately can cancel the download in some browsers.
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
       toast.success('PDF downloaded', { id: 'pdf' })
     } catch {
       toast.error('PDF export failed', { id: 'pdf' })

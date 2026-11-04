@@ -100,6 +100,37 @@ export default function NewCasePage() {
     setLoading(true)
 
     try {
+      // The form collects far more than the CaseSubmit schema accepts. Fold the
+      // cheque/bank/dishonour particulars into the narrative so that what the user
+      // typed is not silently thrown away (the backend has no columns for it).
+      const details = [
+        form.complainant_ar_name && `Complainant AR: ${form.complainant_ar_name}`,
+        form.complainant_address && `Complainant address: ${form.complainant_address}`,
+        form.complainant_phone && `Complainant phone: ${form.complainant_phone}`,
+        form.complainant_email && `Complainant email: ${form.complainant_email}`,
+        form.accused_proprietor && `Accused proprietor/director: ${form.accused_proprietor}`,
+        form.accused_address && `Accused address: ${form.accused_address}`,
+        form.accused_phone && `Accused phone: ${form.accused_phone}`,
+        form.accused_email && `Accused email: ${form.accused_email}`,
+        form.cheque_number && `Cheque no: ${form.cheque_number}`,
+        form.cheque_date && `Cheque date: ${form.cheque_date}`,
+        form.cheque_amount && `Cheque amount: Rs. ${form.cheque_amount}`,
+        form.cheque_amount_words && `Amount in words: ${form.cheque_amount_words}`,
+        form.drawee_bank && `Drawee bank: ${form.drawee_bank}`,
+        form.drawee_branch && `Drawee branch: ${form.drawee_branch}`,
+        form.deposit_bank && `Deposit bank: ${form.deposit_bank}`,
+        form.deposit_branch && `Deposit branch: ${form.deposit_branch}`,
+        form.dishonour_date && `Dishonour date: ${form.dishonour_date}`,
+        form.dishonour_reason && `Dishonour reason: ${form.dishonour_reason}`,
+        form.notice_date && `Legal notice date: ${form.notice_date}`,
+        form.notice_sent_by && `Notice sent by: ${form.notice_sent_by}`,
+        form.notice_delivery_date && `Notice delivery date: ${form.notice_delivery_date}`,
+        form.police_station && `Police station: ${form.police_station}`,
+      ].filter(Boolean)
+      const caseDescription = details.length
+        ? `${form.case_description}\n\nAdditional particulars:\n${details.join('\n')}`
+        : form.case_description
+
       await casesAPI.submit({
         title: `${form.complainant_name} vs ${form.accused_name}`,
         jurisdiction: form.court_location,
@@ -107,13 +138,13 @@ export default function NewCasePage() {
         respondent_name: form.accused_name,
         incident_date: form.cheque_date,
         relief_sought: form.relief_sought,
-        case_description: form.case_description,
+        case_description: caseDescription,
         sections_alleged: form.sections_alleged,
       })
       toast.success('Case draft created successfully!')
       navigate('/cases')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to create case')
+      toast.error(getErrorMessage(err, 'Failed to create case'))
     } finally {
       setLoading(false)
     }

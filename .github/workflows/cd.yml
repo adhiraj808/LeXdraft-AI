@@ -1,16 +1,19 @@
 name: CD
 
 on:
-  push:
+  # Run after CI has passed (ci.yml is a separate workflow, so `needs: [ci]`
+  # inside this file is invalid - GitHub rejects the whole workflow).
+  workflow_run:
+    workflows: [CI]
     branches: [main]
+    types: [completed]
   workflow_dispatch:
 
 jobs:
   deploy:
     name: Deploy to Registry
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    needs: [ci]  # Will run after CI passes
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       packages: write

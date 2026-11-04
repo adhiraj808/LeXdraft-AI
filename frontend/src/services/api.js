@@ -16,7 +16,12 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const url = err.config?.url || ''
+    const isAuthCall = /\/auth\/(login|register|google)/.test(url)
+    // A failed *login* must not bounce the user to /login: that hard reload
+    // wipes out the error toast before LoginPage can show it.
+    const onAuthPage = ['/login', '/register'].includes(window.location.pathname)
+    if (err.response?.status === 401 && !isAuthCall && !onAuthPage) {
       localStorage.removeItem('access_token')
       localStorage.removeItem('user')
       window.location.href = '/login'
@@ -24,6 +29,25 @@ api.interceptors.response.use(
     return Promise.reject(err)
   }
 )
+
+/**
+ * Turn an axios error into a message safe to show in the UI.
+ * FastAPI validation errors (422) return `detail` as an array of objects -
+ * passing that array straight to toast.error() puts an object where React
+ * expects a string and crashes the page ("Objects are not valid as a React
+ * child").
+ */
+export function getErrorMessage(err, fallback = 'Something went wrong. Please try again.') {
+  const detail = err?.response?.data?.detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0]
+    const where = first?.loc ? (Array.isArray(first.loc) ? first.loc.join('.') : String(first.loc)) : 'input'
+    return first?.msg ? `${first.msg} (${where})` : fallback
+  }
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (!err?.response) return 'Cannot reach the server. Is the backend running?'
+  return err?.response?.data?.message || fallback
+}
 
 export const authAPI = {
   register: (data) => api.post('/auth/register', data),
@@ -35,7 +59,7 @@ export const authAPI = {
 export const casesAPI = {
   submit: (data) => api.post('/cases/submit', data),
   prompt: (data) => api.post('/cases/prompt', data),
-  list: (skip = 0, limit = 20) => api.get(`/cases/?skip=${skip}&limit=${limit}`),
+  list: (skip = 0, limit = 100) => api.get(`/cases/?skip=${skip}&limit=${limit}`),
   get: (id) => api.get(`/cases/${id}`),
   delete: (id) => api.delete(`/cases/${id}`),
   regenerate: (id, section, additionalContext = null) =>

@@ -14,39 +14,60 @@ export default defineConfig({
     }
   },
   build: {
-    // Enable code splitting
+    // Vendor splitting is configured below via `advancedChunks` (the Rollup
+    // `manualChunks` option is removed in Vite 8 / Rolldown).
     rollupOptions: {
       output: {
-        manualChunks: (id) => {
-          // Vendor chunks
-          if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
-              return 'vendor-react';
-            }
-            if (id.includes('lucide-react') || id.includes('react-hot-toast')) {
-              return 'vendor-ui';
-            }
-            if (id.includes('axios')) {
-              return 'vendor-utils';
-            }
-            return 'vendor';
-          }
-          // Feature-based chunks
-          if (id.includes('pages/DashboardPage')) return 'page-dashboard';
-          if (id.includes('pages/CaseListPage') || id.includes('pages/CaseDetailPage') || id.includes('pages/NewCasePage')) {
-            return 'page-cases';
-          }
-          if (id.includes('pages/LegalAssistantPage')) return 'page-legal-assistant';
-          if (id.includes('pages/AdminPage')) return 'page-admin';
-          if (id.includes('components/chat')) return 'chat-components';
+        advancedChunks: {
+          minSize: 20 * 1024,
+          groups: [
+            {
+              name: 'vendor-react',
+              test: /node_modules\/(react|react-dom|react-router|react-router-dom|history|@remix-run)\//,
+            },
+            {
+              name: 'vendor-ui',
+              test: /node_modules\/(lucide-react|react-hot-toast)\//,
+            },
+            {
+              name: 'vendor-utils',
+              test: /node_modules\/(axios|follow-redirects|form-data|proxy-from-env)\//,
+            },
+            {
+              name: 'vendor',
+              test: /node_modules\//,
+            },
+            {
+              name: 'page-dashboard',
+              test: /src\/pages\/DashboardPage/,
+            },
+            {
+              name: 'page-cases',
+              test: /src\/pages\/(CaseListPage|CaseDetailPage|NewCasePage)/,
+            },
+            {
+              name: 'page-legal-assistant',
+              test: /src\/pages\/LegalAssistantPage/,
+            },
+            {
+              name: 'page-admin',
+              test: /src\/pages\/AdminPage/,
+            },
+            {
+              name: 'chat-components',
+              test: /src\/components\/chat\//,
+            },
+          ],
         },
         chunkFileNames: 'assets/js/[name]-[hash].js',
         entryFileNames: 'assets/js/[name]-[hash].js',
         assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',
       },
     },
-    // Use esbuild for minification (faster, no extra dependency)
-    minify: 'esbuild',
+    // No minify option: Vite 8 (Rolldown) drops the esbuild-based minifier and
+    // uses its built-in Oxc minifier by default. Setting minify: 'esbuild' here
+    // made the production build fail, and the extra `npm install esbuild` in the
+    // Dockerfile was only there to work around it.
     // Enable CSS code splitting
     cssCodeSplit: true,
     // Reduce chunk size warning limit
