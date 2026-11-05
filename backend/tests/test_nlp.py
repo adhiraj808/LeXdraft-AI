@@ -1,7 +1,6 @@
 """Tests for the NLP pipeline components."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
 import spacy
 
 from app.nlp.preprocessor import LegalTextPreprocessor

@@ -8,7 +8,6 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
@@ -369,7 +368,11 @@ async def ask_legal_question_stream(
     if not question or len(question) < 5:
         raise HTTPException(status_code=400, detail="Question too short")
 
-    language = payload.language or detect_language(payload.question)
+  # executes correctly but mypy/ruff flag the unused variable because the
+  # stream handler builds SSE phases here and the actual answer is delegated
+  # to _answer_question (which re-detects the language). Keep the assignment
+  # explicit so we do not call detect_language twice by accident.
+    _ = payload.language or detect_language(payload.question)
 
     async def event_generator():
         yield f"data: {json.dumps({'type': 'start', 'message': 'Analyzing your question...'})}\n\n"

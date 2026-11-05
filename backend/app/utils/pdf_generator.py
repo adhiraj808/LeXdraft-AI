@@ -1,4 +1,5 @@
-import logging, re
+import logging
+import re
 from typing import Dict
 from io import BytesIO
 logger = logging.getLogger(__name__)

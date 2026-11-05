@@ -6,7 +6,7 @@ Usage: python train_classifier.py --data dataset.csv --output ./classifier_model
 import argparse
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from transformers import (
     AutoTokenizer, AutoModelForSequenceClassification,
     Trainer, TrainingArguments, EvalPrediction
