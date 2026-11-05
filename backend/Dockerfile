@@ -16,6 +16,8 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
+# hadolint DL3008: pin versions so builds are reproducible.
+# hadolint ignore=DL3008 (build-essential/cmake/libpq-dev/libgomp1 are build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -36,6 +38,7 @@ WORKDIR /app
 
 # libpq5 is NOT needed: psycopg2-binary ships its own libpq.
 # libgomp1 is needed by numpy/blis/thinc (spaCy).
+# hadolint ignore=DL3008 (libgomp1 version is tied to the Debian release)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*

@@ -25,7 +25,10 @@ jobs:
           # base/head (trufflehog accepts empty values only on PRs).
           base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
           head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
-          extra_args: --fail --only-verified
+          # extra_args is appended to the action's own default flags, which
+          # already include --fail. Passing it again fails with
+          # "flag 'fail' cannot be repeated".
+          extra_args: --only-verified
 
   dependency-review:
     name: Dependency Review
@@ -51,7 +54,9 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: backend/Dockerfile
+          failure-threshold: error
       - name: Lint frontend Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: frontend/Dockerfile
+          failure-threshold: error
