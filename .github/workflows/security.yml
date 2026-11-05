@@ -51,12 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint backend Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: backend/Dockerfile
           failure-threshold: error
       - name: Lint frontend Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: frontend/Dockerfile
           failure-threshold: error
