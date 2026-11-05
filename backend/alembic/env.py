@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, pool, text
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from app.core.config import settings  # noqa: E402
-from app.db.postgres import Base  # noqa: E402
-from app.models import case, user  # noqa: E402,F401  (register models on Base.metadata)
+from app.core.config import settings
+from app.db.postgres import Base
+from app.models import case, user  # noqa: F401  (register models on Base.metadata)
 
 config = context.config
 

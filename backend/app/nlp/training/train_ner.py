@@ -35,7 +35,7 @@ def train(data_path: str, output_dir: str, n_iter: int = 30):
 
     other_pipes = [p for p in nlp.pipe_names if p != "ner"]
     with nlp.disable_pipes(*other_pipes):
-        optimizer = nlp.begin_training()
+        nlp.begin_training()
         for i in range(n_iter):
             random.shuffle(train_data)
             losses = {}

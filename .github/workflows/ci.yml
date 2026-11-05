@@ -132,4 +132,4 @@ jobs:
       - name: Verify images run
         run: |
           docker run --rm legal-draft-backend:test python -c "import main; print('backend imports OK')"
-          docker run --rm legal-draft-frontend:test ls /app/dist
+          docker run --rm legal-draft-frontend:test ls /usr/share/nginx/html

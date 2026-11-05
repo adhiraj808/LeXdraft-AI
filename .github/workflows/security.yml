@@ -17,16 +17,23 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@v3
+        uses: trufflesecurity/trufflehog@v3.88.2
         with:
           path: ./
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
+          # base/head refs exist only on pull_request events.
+          # On push/schedule there is no PR, so scan the whole repo with no
+          # base/head (trufflehog accepts empty values only on PRs).
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           extra_args: --fail --only-verified
 
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-latest
+    # dependency-review-action needs a base and a head ref, which only exist
+    # on pull_request. On push/schedule it errors with
+    # "Both a base ref and head ref must be provided".
+    if: github.event_name == 'pull_request'
     permissions:
       contents: read
     steps:
@@ -40,9 +47,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Lint Dockerfiles
+      - name: Lint backend Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfiles: |
-            backend/Dockerfile
-            frontend/Dockerfile
+          dockerfile: backend/Dockerfile
+      - name: Lint frontend Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/Dockerfile

@@ -280,7 +280,6 @@ async def admin_delete_user(
         "user",
         {"user_id": user_id, "email": email, "cases_deleted": len(case_ids)},
     )
-    return None
 
 
 @router.get("/cases", response_model=List[AdminCaseItem])
@@ -340,7 +339,6 @@ async def admin_delete_case(
     await db.commit()
     await delete_case_cache(case_id)
     audit_log(admin, "delete_case", "case", {"case_id": case_id, "owner_id": owner_id})
-    return None
 
 
 @router.post("/cases/{case_id}/reprocess", status_code=202)

@@ -1,8 +1,6 @@
 """Unit tests for business logic services."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import uuid
 from app.services.auth_service import AuthService
 from app.schemas.user import UserCreate
 
