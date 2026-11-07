@@ -22,6 +22,19 @@ from pydantic import BaseModel, ConfigDict, Field
 FactStatus = Literal["PROVIDED", "MISSING", "INFERRED"]
 PartyRole = Literal["plaintiff", "defendant", "unknown"]
 EntityType = Literal["individual", "company", "partnership", "llp", "trust", "government", "other", "unknown"]
+ClaimTypeEnum = Literal[
+    "NON_DELIVERY_OF_GOODS",
+    "BREACH_OF_CONTRACT",
+    "CHEQUE_BOUNCE",
+    "SPECIFIC_PERFORMANCE",
+    "RECOVERY_OF_DUES",
+    "DAMAGES",
+    "EVICTION",
+    "DIVORCE",
+    "TERMINATION",
+    "WRONGFUL_TERMINATION",
+    "OTHER",
+]
 
 MISSING_MARKER = "[TO BE CONFIRMED: {field}]"
 
@@ -47,7 +60,11 @@ class FactField(BaseModel):
 
 
 class PartyFact(BaseModel):
-    """A party to the case with role, entity type, and user-side info."""
+    """A party to the case with role, entity type, and user-side info.
+
+    Role and user_side are INFERRED from context, never PROVIDED.
+    Exact legal name and entity type should be confirmed via missing_critical_fields.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -56,7 +73,7 @@ class PartyFact(BaseModel):
     address: Optional[str] = None
     entity_type: EntityType = "unknown"  # individual | company | partnership | etc.
     user_side: Optional[bool] = None     # True if this party is the user's side
-    status: FactStatus = "PROVIDED"
+    status: FactStatus = "INFERRED"      # role/user_side/entity_type are always INFERRED
     source_span: Optional[str] = None
 
     def display(self) -> str:
@@ -85,8 +102,9 @@ class FactSheet(BaseModel):
     damages_claimed: FactField = Field(default_factory=FactField)
     place: FactField = Field(default_factory=FactField)
     claim_type: FactField = Field(default_factory=FactField)
+    claim_type_raw: FactField = Field(default_factory=FactField)  # raw phrase from prompt
     statutes_cited_by_user: List[str] = Field(default_factory=list)
-    relief_sought: FactField = Field(default_factory=FactField)
+    relief_sought: List[FactField] = Field(default_factory=list)  # list of relief items
     has_arbitration_clause: FactField = Field(default_factory=FactField)
     raw_prompt: str = ""
     # Which party the user represents (None = not stated)
@@ -159,7 +177,6 @@ class FactSheet(BaseModel):
             ("damages_claimed", "Damages claimed"),
             ("place", "Place"),
             ("claim_type", "Claim type"),
-            ("relief_sought", "Relief sought"),
             ("has_arbitration_clause", "Arbitration clause"),
         )
         for attr, label in scalar_fields:
@@ -176,6 +193,14 @@ class FactSheet(BaseModel):
         else:
             lines.append(f"Notice date: {missing_marker('notice date')}")
 
+        if self.relief_sought:
+            lines.append("Relief sought:")
+            for i, r in enumerate(self.relief_sought, 1):
+                if r.provided():
+                    lines.append(f"  {i}. {r.value}")
+        else:
+            lines.append(f"Relief sought: {missing_marker('relief sought')}")
+
         if self.statutes_cited_by_user:
             lines.append(
                 "Statutes cited by the user: " + ", ".join(self.statutes_cited_by_user)
@@ -186,36 +211,44 @@ class FactSheet(BaseModel):
         """Return list of questions for fields that must be confirmed before filing.
 
         document_type: "plaint" | "complaint" | "petition" | "writ" | "suit"
+
+        Always asks all 5 critical questions when relevant; never skips because
+        a field was inferred.
         """
         questions: List[str] = []
 
-        # User side is critical for correct party labels
+        # 1. User side — always ask if not explicitly stated by user
         if self.user_side is None:
             questions.append("Which party do you represent? (Plaintiff/Complainant/Petitioner or Defendant/Respondent)")
 
-        # Delivery date for breach of contract
+        # 2. Exact legal names and entity type for each party
+        for p in self.parties:
+            if p.status == "INFERRED" or p.entity_type == "unknown":
+                questions.append(
+                    f"Confirm exact legal name and entity type (individual/company/partnership/LLP/trust/government/other) for '{p.name}'"
+                )
+
+        # 3. Delivery date for breach of contract
         if self.delivery_date.status == "MISSING" and self.contract_value.status != "MISSING":
             questions.append("What was the agreed delivery/performance date?")
 
-        # Notice dates for cheque bounce / contract breach
-        if not self.notice_dates and self.claim_type.value and any(
-            k in (self.claim_type.value or "").lower()
-            for k in ["cheque", "bounce", "breach", "contract"]
-        ):
-            questions.append("Was a legal notice sent? If so, date(s)?")
+        # 4. Notice dates for cheque bounce / contract breach / non-delivery
+        if not self.notice_dates:
+            # Always ask for contract cases (contract_value provided) or cheque bounce
+            is_contract_case = self.contract_value.status != "MISSING"
+            is_cheque = "cheque" in (self.claim_type_raw.value or "").lower() or "138" in " ".join(self.statutes_cited_by_user)
+            is_non_delivery = self.claim_type.value == "NON_DELIVERY_OF_GOODS"
+            is_breach = self.claim_type.value == "BREACH_OF_CONTRACT"
+            if is_contract_case or is_cheque or is_non_delivery or is_breach:
+                questions.append("Was a legal notice sent? If so, date(s)?")
 
-        # Payment status for cheque bounce
-        if "cheque" in (self.claim_type.value or "").lower() or "138" in " ".join(self.statutes_cited_by_user):
+        # 5. Payment status for cheque bounce
+        if "cheque" in (self.claim_type_raw.value or "").lower() or "138" in " ".join(self.statutes_cited_by_user):
             questions.append("Was the cheque presented and dishonoured? Date of dishonour?")
 
-        # Arbitration clause
+        # 6. Arbitration clause
         if self.has_arbitration_clause.status == "MISSING":
             questions.append("Does the contract contain an arbitration clause?")
-
-        # Party roles if unknown
-        for p in self.parties:
-            if p.role == "unknown":
-                questions.append(f"Role of '{p.name}' — plaintiff/complainant or defendant/respondent?")
 
         return questions
 
@@ -278,6 +311,7 @@ def grounded_party(
     entity_type: EntityType = "unknown",
     user_side: Optional[bool] = None,
 ) -> Optional[PartyFact]:
+    """Party name must be grounded; role/entity_type/user_side are always INFERRED."""
     if not name or not is_grounded(name, raw_prompt):
         return None
     return PartyFact(
@@ -286,7 +320,7 @@ def grounded_party(
         address=address if address and is_grounded(address, raw_prompt) else None,
         entity_type=entity_type,
         user_side=user_side,
-        status="PROVIDED",
+        status="INFERRED",
         source_span=name,
     )
 
@@ -294,7 +328,7 @@ def grounded_party(
 # --- Normalization helpers -------------------------------------------------
 
 def normalize_amount_inr(text: str) -> Optional[int]:
-    """Convert Indian money string to integer paise (or rupees).
+    """Convert Indian money string to integer rupees.
 
     Returns rupees as integer. Handles: Rs 50 crore, Rs. 5,00,000, 10 lakh, etc.
     """
@@ -324,7 +358,7 @@ def normalize_amount_inr(text: str) -> Optional[int]:
 
 
 def infer_entity_type(name: str) -> EntityType:
-    """Guess entity type from name."""
+    """Guess entity type from name. Always INFERRED."""
     n = name.lower()
     if any(k in n for k in ["ltd", "limited", "pvt", "private", "corp", "corporation", "inc", "company", "co "]):
         return "company"
@@ -342,15 +376,32 @@ def infer_entity_type(name: str) -> EntityType:
     return "unknown"
 
 
-def infer_role_from_prompt(name: str, prompt: str) -> PartyRole:
-    """Infer plaintiff/defendant from prompt context. Unknown if ambiguous.
+def infer_claim_type(raw_phrase: str) -> ClaimTypeEnum:
+    """Map raw claim phrase to controlled enum."""
+    r = raw_phrase.lower()
+    if "non.delivery" in r or "failed to deliver" in r or "non delivery" in r:
+        return "NON_DELIVERY_OF_GOODS"
+    if "breach" in r:
+        return "BREACH_OF_CONTRACT"
+    if "cheque" in r and "bounce" in r:
+        return "CHEQUE_BOUNCE"
+    if "specific performance" in r:
+        return "SPECIFIC_PERFORMANCE"
+    if "recovery" in r:
+        return "RECOVERY_OF_DUES"
+    if "damages" in r:
+        return "DAMAGES"
+    if "eviction" in r:
+        return "EVICTION"
+    if "divorce" in r:
+        return "DIVORCE"
+    if "termination" in r or "wrongful" in r:
+        return "WRONGFUL_TERMINATION"
+    return "OTHER"
 
-    Logic:
-    - If name appears near plaintiff verbs (filed, sued, seeking, claiming, praying) -> plaintiff
-    - If name appears near defendant verbs (failed to, breached, defaulted, against, accused) -> defendant
-    - Special: "to [Party]" construction -> plaintiff (recipient)
-    - If both parties have markers, the one with plaintiff marker is plaintiff
-    """
+
+def infer_role_from_prompt(name: str, prompt: str) -> PartyRole:
+    """Infer plaintiff/defendant from prompt context. Always INFERRED."""
     lower = prompt.lower()
     name_lower = name.lower()
 
@@ -369,7 +420,6 @@ def infer_role_from_prompt(name: str, prompt: str) -> PartyRole:
         context = lower[max(0, idx - 80):idx + 200]
 
         # Special check: "to [name]" construction -> plaintiff (recipient)
-        # Look for " to " + name pattern before the name
         before = lower[max(0, idx - 30):idx]
         if re.search(r'\bto\s+', before):
             return "plaintiff"
@@ -413,7 +463,7 @@ _STATUTE_RE = re.compile(
 )
 # Organization pattern: capitalized phrases that look like company/party names.
 _ORG_RE = re.compile(
-    r"\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*(?:\s+(?:Ltd|Limited|Pvt|Private|Corp|Corporation|Inc|Company|Co|Manufacturers|Industries|Enterprises|Steel|Motors|Bank|Ltd\.|Pvt\.))?)\b"
+    r"\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\b"
 )
 # Contract date pattern
 _CONTRACT_DATE_RE = re.compile(
@@ -476,14 +526,14 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
             continue
         role = infer_role_from_prompt(cand, prompt)
         entity_type = infer_entity_type(cand)
-        # Determine user_side: if role inferred as plaintiff, assume user is plaintiff side
+        # user_side INFERRED from role
         user_side = (role == "plaintiff") if role != "unknown" else None
         parties.append(PartyFact(
             name=cand,
             role=role,
             entity_type=entity_type,
             user_side=user_side,
-            status="PROVIDED" if is_grounded(cand, prompt) else "INFERRED",
+            status="INFERRED",
             source_span=cand,
         ))
 
@@ -512,10 +562,10 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
     if contract_dates and dates:
         dates = [d for d in dates if not is_grounded(d, contract_dates[0])]
 
-    # Relief sought
+    # Relief sought (list of items, split by "and" or commas)
     relief_matches = [m.group(1).strip() for m in _RELIEF_RE.finditer(prompt)]
 
-    # Claim type
+    # Claim type: raw phrase + controlled enum
     claim_type_matches = [m.group(1).strip().replace(".", " ").replace("_", " ") for m in _CLAIM_TYPE_RE.finditer(prompt)]
     if not claim_type_matches:
         claim_type_matches = [m.group(1).strip().replace(".", " ").replace("_", " ") for m in _CLAIM_TYPE_EXTRA_RE.finditer(prompt)]
@@ -549,12 +599,24 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
             value=places[0], status="PROVIDED", source_span=places[0]
         )
     if relief_matches:
-        sheet.relief_sought = FactField(
-            value=relief_matches[0], status="PROVIDED", source_span=relief_matches[0]
-        )
+        # Split relief by "and" or commas, keep as list
+        relief_items = []
+        for item in relief_matches:
+            # Split on "and" or commas
+            parts = re.split(r'\s+and\s+|,\s*', item)
+            for p in parts:
+                p = p.strip()
+                if p:
+                    relief_items.append(FactField(value=p, status="PROVIDED", source_span=item))
+        sheet.relief_sought = relief_items
     if claim_type_matches:
+        raw_phrase = claim_type_matches[0]
+        enum_val = infer_claim_type(raw_phrase)
         sheet.claim_type = FactField(
-            value=claim_type_matches[0], status="PROVIDED", source_span=claim_type_matches[0]
+            value=enum_val, status="PROVIDED", source_span=raw_phrase
+        )
+        sheet.claim_type_raw = FactField(
+            value=raw_phrase, status="PROVIDED", source_span=raw_phrase
         )
 
     return sheet

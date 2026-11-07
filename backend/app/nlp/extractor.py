@@ -23,6 +23,7 @@ from app.nlp.fact_sheet import (
     is_grounded,
     build_from_text,
     FactField,
+    normalize_amount_inr,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,10 @@ Keys:
 - contract_value: the contract amount/consideration as written (or null)
 - damages_claimed: the damages amount claimed as written (or null)
 - place: the place/jurisdiction/city as written (or null)
-- claim_type: one of "Breach of Contract", "Cheque Bounce", "Divorce", "Termination", "Eviction", "Specific Performance", "Other" (or null)
+- claim_type_raw: the exact phrase describing the claim from the user's text (or null)
+- claim_type_enum: one of "NON_DELIVERY_OF_GOODS", "BREACH_OF_CONTRACT", "CHEQUE_BOUNCE", "SPECIFIC_PERFORMANCE", "RECOVERY_OF_DUES", "DAMAGES", "EVICTION", "DIVORCE", "TERMINATION", "WRONGFUL_TERMINATION", "OTHER" (or null)
 - statutes_cited_by_user: array of statute references the user explicitly mentions (or [])
-- relief_sought: what the client wants, verbatim (or null)
+- relief_sought: array of relief items the client wants, verbatim (or [])
 - has_arbitration_clause: "yes" | "no" | "unknown" (or null)
 
 User text:
@@ -159,18 +161,20 @@ def _build_fact_sheet(raw_prompt: str, llm_data: Optional[Dict], entities: Optio
         return sheet
 
     # Override with LLM-provided values IF they are grounded in the prompt
-    # Petitioner / Respondent
+    # Petitioner / Respondent (names grounded, role/user_side INFERRED)
     pet = llm_data.get("petitioner_name")
     if pet and is_grounded(pet, raw_prompt):
-        p = grounded_party(pet, raw_prompt)
+        # Infer role from prompt context
+        role = "plaintiff"  # LLM says petitioner = plaintiff side
+        p = grounded_party(pet, raw_prompt, role=role)
         if p:
             sheet.parties = [p] + [x for x in sheet.parties if x.name != p.name]
 
     resp = llm_data.get("respondent_name")
     if resp and is_grounded(resp, raw_prompt):
-        r = grounded_party(resp, raw_prompt)
+        role = "defendant"  # LLM says respondent = defendant side
+        r = grounded_party(resp, raw_prompt, role=role)
         if r:
-            # Add as second party if not duplicate
             if not any(x.name == r.name for x in sheet.parties):
                 sheet.parties.append(r)
 
@@ -182,18 +186,43 @@ def _build_fact_sheet(raw_prompt: str, llm_data: Optional[Dict], entities: Optio
         "contract_value": "contract_value",
         "damages_claimed": "damages_claimed",
         "place": "place",
-        "claim_type": "claim_type",
-        "relief_sought": "relief_sought",
         "has_arbitration_clause": "has_arbitration_clause",
     }
     for llm_key, sheet_attr in scalar_map.items():
         val = llm_data.get(llm_key)
         if val and is_grounded(val, raw_prompt):
+            # Normalize amount_inr for money fields
+            normalized = None
+            if sheet_attr in ("contract_value", "damages_claimed"):
+                amt = normalize_amount_inr(val)
+                normalized = {"amount_inr": amt} if amt else None
             setattr(
                 sheet,
                 sheet_attr,
-                FactField(value=val, status="PROVIDED", source_span=val),
+                FactField(value=val, status="PROVIDED", source_span=val, normalized=normalized),
             )
+
+    # claim_type: enum + raw phrase
+    claim_enum = llm_data.get("claim_type_enum")
+    claim_raw = llm_data.get("claim_type_raw")
+    if claim_raw and is_grounded(claim_raw, raw_prompt):
+        sheet.claim_type_raw = FactField(value=claim_raw, status="PROVIDED", source_span=claim_raw)
+        if claim_enum and claim_enum in [
+            "NON_DELIVERY_OF_GOODS", "BREACH_OF_CONTRACT", "CHEQUE_BOUNCE",
+            "SPECIFIC_PERFORMANCE", "RECOVERY_OF_DUES", "DAMAGES", "EVICTION",
+            "DIVORCE", "TERMINATION", "WRONGFUL_TERMINATION", "OTHER"
+        ]:
+            sheet.claim_type = FactField(value=claim_enum, status="PROVIDED", source_span=claim_raw)
+
+    # relief_sought: list of items
+    relief_arr = llm_data.get("relief_sought") or []
+    if relief_arr:
+        grounded_relief = []
+        for item in relief_arr:
+            if item and is_grounded(item, raw_prompt):
+                grounded_relief.append(FactField(value=item, status="PROVIDED", source_span=item))
+        if grounded_relief:
+            sheet.relief_sought = grounded_relief
 
     # Array fields
     notice_dates = llm_data.get("notice_dates") or []
@@ -221,7 +250,7 @@ def _build_fact_sheet(raw_prompt: str, llm_data: Optional[Dict], entities: Optio
 
 def extract_case_fields(
     prompt: str, entities: Optional[Dict] = None
-) -> Optional[FactSheet]:
+) -> FactSheet:
     """Extract a FactSheet from a free prompt.
 
     Returns a FactSheet on success (never None — falls back to deterministic).
