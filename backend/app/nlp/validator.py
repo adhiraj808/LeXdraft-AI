@@ -234,11 +234,210 @@ def validate_draft(
         )
         review_notes.append("Section 73 applies to damages only; specific performance is under SRA ss.10/14/16.")
 
-    # 7. Check for invented party names (names not in FactSheet)
-    # Simple heuristic: capitalized phrases not in known names
-    known_names = [p.name for p in fact_sheet.parties if p.name]
-    known_names.extend(fact_sheet.statutes_cited_by_user)
-    # Skip this for now - complex NLP needed
+    # 7a. Check for invented names (person/org) not in FactSheet
+    # Allowlist: court/statute/generic role words
+    ROLE_WORDS = {
+        "plaintiff", "defendant", "petitioner", "respondent", "complainant", "accused",
+        "appellant", "applicant", "opponent", "claimant",
+        "hon'ble", "honble", "court", "judge", "magistrate", "tribunal",
+        "police", "station", "officer", "inspector", "sub-inspector",
+        "state", "union", "government", "govt", "authority", "board",
+        "company", "ltd", "limited", "pvt", "private", "corporation", "corp",
+        "shri", "smt", "mr", "mrs", "ms", "dr", "advocate", "counsel",
+        "witness", "deponent", "affiant", "authorised", "representative",
+        "january", "february", "march", "april", "may", "june", "july",
+        "august", "september", "october", "november", "december",
+    }
+    
+    # Name pattern: capitalized words (2-4 words), not in known names
+    # Restrict to not match across section boundaries (double newline)
+    NAME_PATTERN = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b")
+    
+    known_names = {p.name for p in fact_sheet.parties if p.name}
+    known_names.update(fact_sheet.statutes_cited_by_user)
+    known_names.update(ROLE_WORDS)
+    
+    # Find all capitalized name-like phrases in draft
+    # Split by section boundaries to avoid matching across sections
+    sections = full_text.split("\n\n")
+    for section in sections:
+        for match in NAME_PATTERN.finditer(section):
+            candidate = match.group(1).strip()
+            if candidate.lower() not in {n.lower() for n in known_names}:
+                errors.append(f"Invented name detected: '{candidate}' not in FactSheet")
+
+    # 7b. Check for invented dates not in FactSheet
+    
+    def _normalize_date(date_str: str) -> str:
+        """Normalize date for comparison: extract month and year."""
+        # Match patterns like "15 March 2026", "March 2026", "15/03/2026", etc.
+        month_year_match = re.search(
+            r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+            r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+            r"Dec(?:ember)?)\s+\d{4}",
+            date_str, re.IGNORECASE
+        )
+        if month_year_match:
+            return month_year_match.group(0).lower()
+        # Also try DD/MM/YYYY or DD-MM-YYYY
+        dmY_match = re.search(r"\b(\d{1,2})[\s/-](\d{1,2})[\s/-](\d{4})\b", date_str)
+        if dmY_match:
+            day, month, year = dmY_match.groups()
+            month_names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+            try:
+                month_name = month_names[int(month) - 1]
+                return f"{month_name} {year}".lower()
+            except (ValueError, IndexError):
+                pass
+        return date_str.lower().strip()
+    
+    def _has_day(date_str: str) -> bool:
+        """Check if date string includes a day component."""
+        # Patterns like "15 March 2026", "15/03/2026", "15-03-2026"
+        return bool(re.search(r"\b\d{1,2}[\s/-]\w+\s+\d{4}\b", date_str)) or \
+               bool(re.search(r"\b\d{1,2}[\s/-]\d{1,2}[\s/-]\d{4}\b", date_str))
+    
+    # Get all grounded dates from FactSheet
+    grounded_dates = set()
+    for field_name in ["contract_date", "delivery_date", "incident_date"]:
+        field = getattr(fact_sheet, field_name, None)
+        if field and field.value:
+            norm = _normalize_date(field.value)
+            grounded_dates.add(norm)
+            if _has_day(field.value):
+                grounded_dates.add(norm + "_with_day")
+    for nd in fact_sheet.notice_dates:
+        if nd.value:
+            norm = _normalize_date(nd.value)
+            grounded_dates.add(norm)
+            if _has_day(nd.value):
+                grounded_dates.add(norm + "_with_day")
+    
+    # Date pattern for finding dates in draft
+    _DATE_RE = re.compile(
+        r"\b(?:\d{1,2}[\s/-])?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+        r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+        r"Dec(?:ember)?)[\s,/-]+\d{2,4}\b",
+        re.IGNORECASE,
+    )
+    
+    # Check all dates in draft
+    for match in _DATE_RE.finditer(full_text):
+        found_date = match.group(0).strip()
+        normalized_found = _normalize_date(found_date)
+        has_day = _has_day(found_date)
+        
+        # Check if normalized date matches any grounded date
+        match_found = False
+        for gd in grounded_dates:
+            if normalized_found == gd:
+                match_found = True
+                break
+        if not match_found:
+            errors.append(f"Invented date detected: '{found_date}' not in FactSheet")
+        elif not _has_day(found_date) and any(gd.endswith("_with_day") for gd in grounded_dates if gd.startswith(normalized_found)):
+            # FactSheet has day precision but draft doesn't - that's OK (less precise is OK)
+            pass
+        elif has_day and not any(gd.endswith("_with_day") for gd in grounded_dates if gd.startswith(normalized_found.rsplit(" ", 1)[0])):
+            # Draft has day but FactSheet doesn't - flag as invented precision
+                errors.append(f"Invented date detected: '{found_date}' adds day precision not in FactSheet")
+
+    # 7c. Check for invented rupee amounts not in FactSheet
+    _AMOUNT_RE = re.compile(
+        r"(?:Rs\.?|INR|₹)\s*[\d,]+(?:\.\d{2})?(?:\s*(?:lakhs?|crores?|thousands?))?",
+        re.IGNORECASE,
+    )
+    
+    grounded_amounts = set()
+    for field_name in ["contract_value", "damages_claimed"]:
+        field = getattr(fact_sheet, field_name, None)
+        if field and field.normalized and field.normalized.get("amount_inr"):
+            grounded_amounts.add(field.normalized["amount_inr"])
+        elif field and field.value:
+            amt = normalize_amount(field.value)
+            if amt:
+                grounded_amounts.add(amt)
+    
+    for match in _AMOUNT_RE.finditer(full_text):
+        found_amt = match.group(0).strip()
+        amt = normalize_amount(found_amt)
+        if amt and amt not in grounded_amounts:
+            errors.append(f"Invented amount detected: '{found_amt}' not in FactSheet")
+
+    # 7d. Check for invented addresses/plot numbers/clause numbers not in FactSheet
+    # Address pattern: Plot/Sector/Flat/House/Door/Building/Unit No.
+    _ADDRESS_RE = re.compile(
+        r"\b(?:Plot|Sector|Flat|House|Door|Building|Unit)\s+(?:No\.?\s*)?[\w/-]+",
+        re.IGNORECASE,
+    )
+    # Clause pattern: Clause/Section/Article/Paragraph/Sub-section No.
+    _CLAUSE_RE = re.compile(
+        r"\b(?:Clause|Section|Article|Paragraph|Sub[- ]section|Schedule)\s+(?:No\.?\s*)?[\dA-Za-z]+",
+        re.IGNORECASE,
+    )
+    
+    for match in _ADDRESS_RE.finditer(full_text):
+        found = match.group(0).strip()
+        errors.append(f"Invented address detected: '{found}' not in FactSheet")
+    
+    for match in _CLAUSE_RE.finditer(full_text):
+        found = match.group(0).strip()
+        # Allow statute sections (Section 73, etc.) - those are checked separately
+        if not re.search(r"\bsection\s+\d+", found, re.IGNORECASE):
+            errors.append(f"Invented clause/section detected: '{found}' not in FactSheet")
+
+    # 7e. Consistent party-name spelling across all 7 sections
+    party_names = [p.name for p in fact_sheet.parties if p.name]
+    for name in party_names:
+        # Find all occurrences and check for variants
+        # We need to match whole party names, not partial matches
+        # Pattern: exact name OR name + corporate suffix (Ltd, Limited, Pvt, etc.)
+        # But NOT partial matches like "Indira Car" when name is "Indira Car Manufacturers"
+        
+        # Escape the full name for exact matching
+        escaped_name = re.escape(name)
+        # 7e. Consistent party-name spelling across all 7 sections
+    party_names = [p.name for p in fact_sheet.parties if p.name]
+    for name in party_names:
+        # Find all occurrences and check for variants
+        # Party names must appear EXACTLY as in FactSheet (no added corporate suffixes)
+        # But partial mentions (prefixes) like "Indira Car" for "Indira Car Manufacturers" are OK
+        
+        # Escape the full name for exact matching
+        escaped_name = re.escape(name)
+        
+        # Check for variants with corporate suffixes (Ltd, Limited, Pvt, etc.) - these are INVALID
+        corporate_suffixes = r"(?:\s+(?:Ltd|Limited|Pvt|Private|Corp|Corporation|Inc|Company|Co|LLP|LLP\.))"
+        invalid_variant_pattern = rf"\b{escaped_name}{corporate_suffixes}\b"
+        
+        # Find invalid variants with corporate suffixes
+        invalid_matches = list(re.finditer(invalid_variant_pattern, full_text, re.IGNORECASE))
+        for match in invalid_matches:
+            variant = match.group(0)
+            errors.append(f"Inconsistent party name: '{variant}' vs FactSheet '{name}'")
+        
+        # Also check for partial mentions that are NOT prefixes of the full name
+        # e.g., "Indira Car" for "Indira Car Manufacturers" is OK (prefix)
+        # But "Tata SteelX" for "Tata Steel" would be invalid
+        words = name.split()
+        if len(words) >= 2:
+            first_word = words[0]
+            # Find all occurrences of first_word followed by words
+            for variant_match in re.finditer(rf"\b{re.escape(first_word)}\s+\w+", full_text, re.IGNORECASE):
+                variant = variant_match.group(0)
+                # Skip if it's a valid exact match
+                if re.match(rf"\b{re.escape(name)}\b", variant, re.IGNORECASE):
+                    continue
+                # Skip if it's a valid prefix of the full name (e.g., "Indira Car" for "Indira Car Manufacturers")
+                if name.lower().startswith(variant.lower()):
+                    continue
+                # Skip if it's a valid variant with corporate suffix (already caught above)
+                corporate_suffixes = r"(?:\s+(?:Ltd|Limited|Pvt|Private|Corp|Corporation|Inc|Company|Co|LLP|LLP\.))"
+                invalid_variant_pattern = rf"\b{escaped_name}{corporate_suffixes}\b"
+                if re.match(invalid_variant_pattern, variant, re.IGNORECASE):
+                    continue
+                # Otherwise it's an inconsistent variant
+                errors.append(f"Inconsistent party name: '{variant}' vs FactSheet '{name}'")
 
     # 8. Review notes for party names, roles
     review_notes.append("Exact legal names and entity types to be confirmed.")

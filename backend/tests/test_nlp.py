@@ -505,8 +505,216 @@ class TestValidator:
         notes_s73 = result_with_s73["review_notes"]
         assert any("Section 73 applies to damages only" in n for n in notes_s73)
 
+    def test_validate_draft_invented_name(self):
+        """Validator flags invented person/org names not in FactSheet."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
 
-class TestAlembic003:
+        # Draft includes the real parties from FactSheet, plus an invented name
+        draft = {
+            "title_block": "Tata Steel vs Indira Car Manufacturers",
+            "complaint_body": "Tata Steel failed to deliver. Mahindra Car Manufacturers was involved in the transaction",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Invented name detected: 'Mahindra Car Manufacturers'" in e for e in result["errors"])
+
+    def test_validate_draft_allows_known_names(self):
+        """Validator allows known names from FactSheet."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Tata Steel vs Indira Car Manufacturers",
+            "complaint_body": "Tata Steel failed to deliver",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        # Should not flag Tata Steel or Indira Car Manufacturers
+        for e in result["errors"]:
+            assert "Tata Steel" not in e
+            assert "Indira Car Manufacturers" not in e
+
+    def test_validate_draft_invented_date(self):
+        """Validator flags dates not in FactSheet."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Contract dated 15 March 2026",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Invented date detected: '15 March 2026'" in e for e in result["errors"])
+
+    def test_validate_draft_allows_grounded_dates(self):
+        """Validator allows dates from FactSheet."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Contract dated March 2026 in Jamshedpur",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        # Should not flag March 2026 or Jamshedpur (place is allowed)
+        for e in result["errors"]:
+            assert "March 2026" not in e
+
+    def test_validate_draft_invented_amount(self):
+        """Validator flags rupee amounts not in FactSheet."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Amount of Rs 75,00,00,000 was due",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Invented amount detected: 'Rs 75,00,00,000'" in e for e in result["errors"])
+
+    def test_validate_draft_allows_grounded_amounts(self):
+        """Validator allows amounts from FactSheet."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Amount of Rs 50 crore",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        # Should not flag Rs 50 crore
+        for e in result["errors"]:
+            assert "Rs 50 crore" not in e
+
+    def test_validate_draft_invented_address(self):
+        """Validator flags invented addresses/plot numbers."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Property at Plot No. 42, Sector 8",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Invented address detected: 'Plot No. 42'" in e for e in result["errors"])
+
+    def test_validate_draft_invented_clause(self):
+        """Validator flags invented clause/section numbers."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "As per Clause 2 of the agreement",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Invented clause/section detected: 'Clause 2'" in e for e in result["errors"])
+
+    def test_validate_draft_allows_statute_sections(self):
+        """Validator allows statute section references (Section 73, etc.)."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Under Section 73 of the Indian Contract Act",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        # Should not flag Section 73
+        for e in result["errors"]:
+            assert "Section 73" not in e
+
+    def test_validate_draft_inconsistent_party_name(self):
+        """Validator flags inconsistent party name spelling across sections."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Tata Steel Ltd vs Indira Car Manufacturers",
+            "complaint_body": "Tata Steel failed to deliver",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        # Should flag "Tata Steel Ltd" vs "Tata Steel" from FactSheet
+        assert any("Inconsistent party name: 'Tata Steel Ltd' vs FactSheet 'Tata Steel'" in e for e in result["errors"])
+
+    def test_validate_draft_consistent_party_names_allowed(self):
+        """Validator allows exact party name matches."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Tata Steel vs Indira Car Manufacturers",
+            "complaint_body": "Tata Steel failed to deliver to Indira Car Manufacturers",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        # Should not flag exact matches
+        for e in result["errors"]:
+            assert "Inconsistent party name" not in e
     """Ensure Alembic 003 upgrade/downgrade works."""
 
     def test_migration_import(self):
