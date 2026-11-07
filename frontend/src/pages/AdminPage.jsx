@@ -323,7 +323,7 @@ export default function AdminPage() {
                     <select 
                       value={aiConfig.model} 
                       onChange={(e) => setDefaultModel(e.target.value)}
-                      className="model-select"
+                      className="model-select select-input"
                     >
                       {aiConfig.models?.map((m) => (
                         <option key={m.id} value={m.id}>
@@ -361,6 +361,7 @@ export default function AdminPage() {
                     <label className="field-label">Model ID</label>
                     <input
                       type="text"
+                      className="text-input"
                       value={newModel.id}
                       onChange={(e) => setNewModel({...newModel, id: e.target.value})}
                       placeholder="e.g., groq-llama3"
@@ -371,6 +372,7 @@ export default function AdminPage() {
                     <label className="field-label">Display Label</label>
                     <input
                       type="text"
+                      className="text-input"
                       value={newModel.label}
                       onChange={(e) => setNewModel({...newModel, label: e.target.value})}
                       placeholder="e.g., Groq (Llama 3.1 70B)"
@@ -379,7 +381,7 @@ export default function AdminPage() {
                   </div>
                   <div className="field">
                     <label className="field-label">Provider</label>
-                    <select value={newModel.provider} onChange={(e) => setNewModel({...newModel, provider: e.target.value})} required>
+                    <select value={newModel.provider} onChange={(e) => setNewModel({...newModel, provider: e.target.value})} className="select-input model-select" required>
                       <option value="">Select provider</option>
                       <option value="groq">Groq</option>
                       <option value="hf">HuggingFace</option>

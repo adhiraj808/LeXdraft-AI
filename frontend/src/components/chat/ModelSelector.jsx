@@ -3,10 +3,13 @@ import { casesAPI } from '../../services/api'
 import { Icon } from './Icons'
 
 /**
- * Dual Model Selector for Chat Interface
- * Allows user to select Primary and Fallback models
+ * Model selector. Two modes:
+ *  - compact (composer footer, Claude "Sonnet" pill style): single Primary
+ *    dropdown only — no Fallback/swap labels, tiny height so the popover
+ *    never covers the composer placeholder or the Copy/Good/Bad row.
+ *  - full (legacy topbar): Primary + swap + Fallback dual selector.
  */
-export function ModelSelector({ onModelsChange, initialPrimary, initialFallback }) {
+export function ModelSelector({ onModelsChange, initialPrimary, initialFallback, compact }) {
   const [models, setModels] = useState([])
   const [primaryModel, setPrimaryModel] = useState(initialPrimary || 'groq')
   const [fallbackModel, setFallbackModel] = useState(initialFallback || 'template')
@@ -37,7 +40,6 @@ export function ModelSelector({ onModelsChange, initialPrimary, initialFallback 
 
   const handlePrimaryChange = (modelId) => {
     if (modelId === fallbackModel) {
-      // Swap fallback to previous primary
       setFallbackModel(primaryModel)
     }
     setPrimaryModel(modelId)
@@ -47,7 +49,6 @@ export function ModelSelector({ onModelsChange, initialPrimary, initialFallback 
 
   const handleFallbackChange = (modelId) => {
     if (modelId === primaryModel) {
-      // Swap primary to previous fallback
       setPrimaryModel(fallbackModel)
     }
     setFallbackModel(modelId)
@@ -63,6 +64,35 @@ export function ModelSelector({ onModelsChange, initialPrimary, initialFallback 
     return models.find(m => m.id === modelId)?.provider || ''
   }
 
+  // ─── Compact (Composer popover): single list, like Claude "Sonnet 5.5" ───
+  if (compact) {
+    return (
+      <div className="model-selector-compact">
+        <ul className="model-compact-list" role="listbox">
+          {models.length === 0 ? (
+            <li className="model-dropdown-item" style={{ pointerEvents: 'none' }}>
+              <span className="model-item-label">Loading models…</span>
+            </li>
+          ) : (
+            models.map((model) => (
+              <li
+                key={model.id}
+                role="option"
+                aria-selected={primaryModel === model.id}
+                onClick={() => handlePrimaryChange(model.id)}
+                className={`model-dropdown-item ${primaryModel === model.id ? 'selected' : ''}`}
+              >
+                <span className="model-item-label">{model.label}</span>
+                <span className="model-item-provider">{model.provider}</span>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+    )
+  }
+
+  // ─── Full (legacy dual Primary/Fallback) ───────────────────────────────
   return (
     <div className="model-selector-dual">
       <div className="model-selector-row">

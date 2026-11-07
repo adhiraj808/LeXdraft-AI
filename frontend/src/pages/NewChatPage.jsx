@@ -11,7 +11,6 @@ import {
 } from '../components/chat/Conversation'
 import { Composer } from '../components/chat/Composer'
 import { ContextPanel, ContextToggle } from '../components/chat/ContextPanel'
-import { ModelSelector } from '../components/chat/ModelSelector'
 import { Icon } from '../components/chat/Icons'
 
 function now() {
@@ -48,6 +47,9 @@ export default function NewChatPage() {
   const [recents, setRecents] = useState([])
   const [primaryModel, setPrimaryModel] = useState('groq')
   const [fallbackModel, setFallbackModel] = useState('template')
+  const [sessionTitle, setSessionTitle] = useState('New chat')
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [feedbackById, setFeedbackById] = useState({})
   const recognitionRef = useRef(null)
   const pollRef = useRef(null)
   const bottomRef = useRef(null)
@@ -55,6 +57,7 @@ export default function NewChatPage() {
   const handleModelsChange = ({ primary, fallback }) => {
     setPrimaryModel(primary)
     setFallbackModel(fallback)
+    toast.success(`Model changed to ${primary}`)
   }
 
   useEffect(() => {
@@ -93,6 +96,9 @@ export default function NewChatPage() {
     setIsLoading(false)
     setIsListening(false)
     setVoiceNotice('')
+    setSessionTitle('New chat')
+    setEditingTitle(false)
+    setFeedbackById({})
     setContextInfo({ extracted: [], sources: [], activity: [] })
     navigate('/cases/aichat')
   }
@@ -135,6 +141,8 @@ export default function NewChatPage() {
         extracted: chips,
         sources: (ents.statutes || []).slice(0, 4).map((s) => ({ name: s, meta: 'Identified statute', tone: 'policy' })),
       }))
+      setSessionTitle(d.title || 'New chat')
+      setFeedbackById({})
       pushActivity('Opened previous chat')
     } catch (err) {
       toast.error(describeError(err, 'Could not open that chat.'))
@@ -284,58 +292,108 @@ export default function NewChatPage() {
     }, 4000)
   }
 
+  // Claude-style empty state: minimal topbar (no plan/upgrade pill, no
+  // incognito) + centered hero with the composer inside. The sidebar is
+  // intentionally left untouched — only the main panel changes.
+  const isEmpty = messages.length === 0
+
+  const topbarMinimal = (
+    <header className="chat-topbar chat-topbar--minimal">
+      <div className="topbar-left">
+        <SidebarTrigger onOpen={() => setSidebarOpen(true)} />
+      </div>
+      <div className="top-actions">
+        <ContextToggle onOpen={() => setContextOpen(true)} />
+      </div>
+    </header>
+  )
+
+  const topbarFull = (
+    <header className="chat-topbar">
+      <div className="topbar-left">
+        <SidebarTrigger onOpen={() => setSidebarOpen(true)} />
+        <div className="matter-title">
+          {editingTitle ? (
+            <input
+              autoFocus
+              className="session-title-input"
+              value={sessionTitle}
+              onChange={(e) => setSessionTitle(e.target.value)}
+              onBlur={() => setEditingTitle(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setEditingTitle(false)
+                  toast.success('Session renamed')
+                }
+              }}
+              aria-label="Rename this chat"
+            />
+          ) : (
+            <button
+              type="button"
+              className="session-title-btn"
+              onClick={() => setEditingTitle(true)}
+              title="Rename this chat"
+            >
+              <span>{sessionTitle || 'New chat'}</span>
+              <span className="session-title-chevron">▾</span>
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="top-actions">
+        <ContextToggle onOpen={() => setContextOpen(true)} />
+      </div>
+    </header>
+  )
+
+  const composer = (
+    <Composer
+      message={message}
+      setMessage={setMessage}
+      isLoading={isLoading}
+      onSubmit={handleSubmit}
+      isListening={isListening}
+      voiceNotice={voiceNotice}
+      toggleVoice={toggleVoice}
+      primaryModel={primaryModel}
+      fallbackModel={fallbackModel}
+      onModelsChange={handleModelsChange}
+    />
+  )
+
   return (
     <div className="chat-page">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} recents={recents} onNewChat={startNewChat} onSelectRecent={loadPreviousChat} />
       <SidebarOverlay isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <main className="chat-main">
-        <header className="chat-topbar">
-          <div className="topbar-left">
-            <SidebarTrigger onOpen={() => setSidebarOpen(true)} />
-            <div className="matter-title">
-              <span className="eyebrow">NEW CASE · CHAT</span>
-              <div className="title-line">
-                <strong>Describe your case</strong>
-                <span className="saved-status">AI POWERED</span>
-              </div>
-            </div>
-          </div>
-          <div className="top-actions">
-            <ModelSelector
-              onModelsChange={handleModelsChange}
-              initialPrimary={primaryModel}
-              initialFallback={fallbackModel}
-            />
-            <ContextToggle onOpen={() => setContextOpen(true)} />
-          </div>
+      <main className={'chat-main' + (isEmpty ? ' chat-main--hero' : '')}>
+        {isEmpty ? (
+          <>
+            {topbarMinimal}
+            <div className="chat-hero">
+              <h1 className="chat-hero-title">
+                <span className="chat-hero-mark" aria-hidden="true"><Icon name="Sparkles" size={34} /></span>
+                <span>LexDraft AI ?</span>
+              </h1>
+              <p className="chat-hero-sub">Describe the case in your own words — English, Hindi or Hinglish. AI extracts parties, court, statutes and drafts the pleading.</p>
 
-        </header>
-
-        <div className="chat-conversation">
-          <DateRule>Today</DateRule>
-
-          {backendUp === false ? (
-            <div className="banner banner--error" role="alert">
-              <div>
-                <div className="banner-title">Backend not reachable</div>
-                <div className="banner-body">
-                  The AI service did not answer. Make sure the backend is running
-                  (docker compose up) and you opened this page via http://localhost:5173
-                  — the 127.0.0.1 address also works.
+              {backendUp === false ? (
+                <div className="banner banner--error" role="alert">
+                  <div>
+                    <div className="banner-title">Backend not reachable</div>
+                    <div className="banner-body">
+                      The AI service did not answer. Make sure the backend is running
+                      and you opened this page via http://localhost:5173
+                      — the 127.0.0.1 address also works.
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          ) : null}
+              ) : null}
 
-          {messages.length === 0 ? (
-            <div className="welcome-state">
-              <div className="welcome-icon">
-                <Icon name="Sparkles" size={56} />
-              </div>
-              <h2>Start with a prompt</h2>
-              <p>Describe the case in your own words — English, Hindi or Hinglish. AI extracts parties, court, statutes and drafts the pleading.</p>
-              <div className="suggested-prompts">
+              <div className="chat-hero-composer">{composer}</div>
+
+              <div className="suggested-prompts chat-hero-prompts">
                 {SUGGESTIONS.map((s) => (
                   <button key={s.label} className="prompt-chip" type="button" onClick={() => setMessage(s.text)}>
                     {s.label}
@@ -343,43 +401,78 @@ export default function NewChatPage() {
                 ))}
               </div>
             </div>
-          ) : (
-            messages.map((msg) => (
-              msg.role === 'user' ? (
-                <UserMessage key={msg.id} time={msg.time}>
-                  {msg.content}
-                </UserMessage>
-              ) : (
-                <AssistantMessage key={msg.id} time={msg.time} label="LEGAL DRAFTING" draft={msg.caseId ? { modelUsed: msg.model } : null} onViewDraft={msg.caseId ? () => navigate('/cases/' + msg.caseId) : null}>
-                  {msg.content}
-                  {msg.preview ? <p className="assistant-preview">{msg.preview}</p> : null}
-                </AssistantMessage>
-              )
-            ))
-          )}
-          {isLoading ? (
-            <LoadingMessage
-              statusText={
-                pollRound < 3
-                  ? 'Extracting parties, court and statutes from your prompt…'
-                  : pollRound < 10
-                    ? 'Classifying case and finding precedents…'
-                    : 'Drafting all 7 sections — usually done within 1–2 min…'
-              }
-            />
-          ) : null}
-          <div ref={bottomRef} />
-        </div>
+            {isLoading ? (
+              <div className="chat-hero-loading">
+                <LoadingMessage
+                  statusText={
+                    pollRound < 3
+                      ? 'Extracting parties, court and statutes from your prompt…'
+                      : pollRound < 10
+                        ? 'Classifying case and finding precedents…'
+                        : 'Drafting all 7 sections — usually done within 1–2 min…'
+                  }
+                />
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {topbarFull}
 
-        <Composer
-          message={message}
-          setMessage={setMessage}
-          isLoading={isLoading}
-          onSubmit={handleSubmit}
-          isListening={isListening}
-          voiceNotice={voiceNotice}
-          toggleVoice={toggleVoice}
-        />
+            <div className="chat-conversation">
+              <DateRule>Today</DateRule>
+
+              {backendUp === false ? (
+                <div className="banner banner--error" role="alert">
+                  <div>
+                    <div className="banner-title">Backend not reachable</div>
+                    <div className="banner-body">
+                      The AI service did not answer. Make sure the backend is running
+                      (docker compose up) and you opened this page via http://localhost:5173
+                      — the 127.0.0.1 address also works.
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {messages.map((msg) => (
+                msg.role === 'user' ? (
+                  <UserMessage key={msg.id} time={msg.time}>
+                    {msg.content}
+                  </UserMessage>
+                ) : (
+                  <AssistantMessage
+                    key={msg.id}
+                    time={msg.time}
+                    label="LEGAL DRAFTING"
+                    draft={msg.caseId ? { modelUsed: msg.model } : null}
+                    onViewDraft={msg.caseId ? () => navigate('/cases/' + msg.caseId) : null}
+                    copyText={(msg.content || '') + (msg.preview ? '\n\n' + msg.preview : '')}
+                    feedback={feedbackById[msg.id] || null}
+                    onFeedback={(value) => setFeedbackById((cur) => ({ ...cur, [msg.id]: value }))}
+                  >
+                    {msg.content}
+                    {msg.preview ? <p className="assistant-preview">{msg.preview}</p> : null}
+                  </AssistantMessage>
+                )
+              ))}
+              {isLoading ? (
+                <LoadingMessage
+                  statusText={
+                    pollRound < 3
+                      ? 'Extracting parties, court and statutes from your prompt…'
+                      : pollRound < 10
+                        ? 'Classifying case and finding precedents…'
+                        : 'Drafting all 7 sections — usually done within 1–2 min…'
+                  }
+                />
+              ) : null}
+              <div ref={bottomRef} />
+            </div>
+
+            {composer}
+          </>
+        )}
       </main>
 
       <ContextPanel isOpen={contextOpen} onClose={() => setContextOpen(false)} info={contextInfo} />
