@@ -16,6 +16,7 @@ from app.nlp.fact_sheet import (
     infer_entity_type,
     infer_claim_type,
 )
+from app.nlp.validator import validate_draft, is_statute_whitelisted
 
 
 @pytest.fixture
@@ -385,6 +386,124 @@ class TestSchemaParity:
                 if v1 and v2:
                     assert hasattr(v1[0], "name") and hasattr(v1[0], "role") and hasattr(v1[0], "status")
                     assert hasattr(v2[0], "name") and hasattr(v2[0], "role") and hasattr(v2[0], "status")
+
+
+class TestValidator:
+    """Tests for the validator."""
+
+    def test_statute_whitelist_check(self):
+        """Whitelisted statutes pass, others flagged."""
+        assert is_statute_whitelisted("Section 73 of the Indian Contract Act 1872") is True
+        assert is_statute_whitelisted("Section 74 of the Indian Contract Act 1872") is True
+        assert is_statute_whitelisted("Section 10 of the Specific Relief Act 1963") is True
+        assert is_statute_whitelisted("Section 138 of the Negotiable Instruments Act 1881") is True
+        assert is_statute_whitelisted("Section 999 of Some Random Act") is False
+
+    def test_validate_draft_detects_missing_placeholders(self):
+        """Validator flags MISSING fields not rendered as placeholders."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        # Draft with all placeholders present
+        draft_with_placeholders = {
+            "title_block": "Title with [TO BE CONFIRMED: delivery date]",
+            "complaint_body": "Body with [TO BE CONFIRMED: damages claimed]",
+            "prayer": "Prayer with [TO BE CONFIRMED: arbitration clause]",
+            "list_of_witnesses": "Witnesses",
+            "list_of_documents": "Documents",
+            "affidavit": "Affidavit",
+            "evidence_affidavit": "Evidence",
+        }
+
+        result = validate_draft(draft_with_placeholders, sheet)
+        # Should have warnings for missing fields but no hard errors
+        assert "to_complete" in result
+        assert len(result["to_complete"]) > 0
+
+    def test_validate_draft_flags_contract_eq_damages(self):
+        """Validator warns when contract value equals damages claimed."""
+        from app.nlp.fact_sheet import build_from_text, FactField
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        # Simulate case where damages = contract value (not separately pleaded)
+        sheet.damages_claimed = FactField(value="Rs 50 crore", status="INFERRED", source_span="Rs 50 crore")
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Body with Rs 50 crore damages",
+            "prayer": "Prayer for Rs 50 crore damages",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("damages must be separately pleaded" in w for w in result["warnings"])
+
+    def test_validate_draft_flags_section73_for_specific_performance(self):
+        """Validator warns about 'specific performance under Section 73'."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Body",
+            "prayer": "Prayer for specific performance under Section 73",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Section 73 applies to damages only" in w for w in result["warnings"])
+
+    def test_validate_draft_unverified_statute(self):
+        """Validator flags unverified statute citations."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        draft = {
+            "title_block": "Title",
+            "complaint_body": "Body citing Section 999 of Random Act",
+            "prayer": "Prayer",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+
+        result = validate_draft(draft, sheet)
+        assert any("Unverified statute citation" in w for w in result["warnings"])
+
+    def test_validate_draft_review_notes_present(self):
+        """Validator always includes standard review notes."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+
+        # Draft without the problematic text - should have basic review notes
+        draft_basic = {k: "Section " + k for k in ["title_block", "complaint_body", "prayer", "list_of_witnesses", "list_of_documents", "affidavit", "evidence_affidavit"]}
+        result_basic = validate_draft(draft_basic, sheet)
+        assert "review_notes" in result_basic
+        notes = result_basic["review_notes"]
+        assert any("Exact legal names" in n for n in notes)
+        assert any("Party roles assumed" in n for n in notes)
+        # Section 73 note only added when draft contains the problematic text
+        assert not any("Section 73 applies to damages only" in n for n in notes)
+
+        # Draft WITH the problematic text - should have Section 73 review note
+        draft_with_s73 = {
+            "title_block": "Title",
+            "complaint_body": "Body",
+            "prayer": "Prayer for specific performance under Section 73",
+            "list_of_witnesses": "W",
+            "list_of_documents": "D",
+            "affidavit": "A",
+            "evidence_affidavit": "E",
+        }
+        result_with_s73 = validate_draft(draft_with_s73, sheet)
+        notes_s73 = result_with_s73["review_notes"]
+        assert any("Section 73 applies to damages only" in n for n in notes_s73)
 
 
 class TestAlembic003:
