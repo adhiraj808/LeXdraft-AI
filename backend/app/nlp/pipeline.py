@@ -113,13 +113,18 @@ class NLPPipeline:
         """Build the generation context from FactSheet (preferred) or legacy fields."""
         # Phase 1: Prefer FactSheet when available
         fact_sheet = case_input.get("fact_sheet")
-        raw_prompt = case_input.get("raw_prompt")
 
         if fact_sheet and isinstance(fact_sheet, dict):
             # Convert dict back to FactSheet-like access
-            # (we don't need the full model, just the dict structure)
             fs = fact_sheet
             parties = fs.get("parties", [])
+
+            # relief_sought is now a list of FactField objects
+            relief_items = fs.get("relief_sought", [])
+            relief_text = ""
+            if relief_items:
+                relief_vals = [r.get("value") for r in relief_items if r.get("value")]
+                relief_text = "; ".join(relief_vals)
 
             return {
                 "case_type": classification["case_type"],
@@ -134,7 +139,7 @@ class NLPPipeline:
                 "dates": fs.get("notice_dates", []),
                 "incident_date": fs.get("incident_date", {}).get("value") or case_input.get("incident_date") or "the relevant date",
                 "location": fs.get("place", {}).get("value") or case_input.get("jurisdiction") or "India",
-                "relief_sought": fs.get("relief_sought", {}).get("value") or case_input.get("relief_sought") or "appropriate relief as deemed fit",
+                "relief_sought": relief_text or case_input.get("relief_sought") or "appropriate relief as deemed fit",
                 "money": entities.get("money", []),
                 "rag_context": rag_context,
                 # FactSheet fields for the generator
@@ -142,9 +147,10 @@ class NLPPipeline:
                 "delivery_date": fs.get("delivery_date", {}).get("value"),
                 "contract_value": fs.get("contract_value", {}).get("value"),
                 "damages_claimed": fs.get("damages_claimed", {}).get("value"),
-                "claim_type": fs.get("claim_type", {}).get("value"),
+                "claim_type": fs.get("claim_type", {}).get("value"),  # enum value
+                "claim_type_raw": fs.get("claim_type_raw", {}).get("value"),
                 "has_arbitration_clause": fs.get("has_arbitration_clause", {}).get("value"),
-                "raw_prompt": raw_prompt,
+                "raw_prompt": case_input.get("raw_prompt"),
                 "fact_sheet": fs,
             }
 

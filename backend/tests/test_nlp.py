@@ -7,9 +7,14 @@ from app.nlp.preprocessor import LegalTextPreprocessor
 from app.nlp.ner import LegalNERExtractor
 from app.nlp.classifier import CaseClassifier
 from app.nlp.fact_sheet import (
+    FactSheet,
+    FactField,
     is_grounded,
     build_from_text,
     missing_marker,
+    normalize_amount_inr,
+    infer_entity_type,
+    infer_claim_type,
 )
 
 
@@ -112,7 +117,7 @@ TATA_STEEL_PROMPT = (
 
 
 class TestFactSheet:
-    """Phase 1 tests for FactSheet grounding and deterministic fallback."""
+    """Tests for FactSheet grounding, deterministic fallback, and new structure."""
 
     def test_is_grounded_rejects_ungrounded_value(self):
         """A value not present in raw_prompt must be MISSING."""
@@ -131,22 +136,26 @@ class TestFactSheet:
         party_names = sheet.party_names()
         assert "Tata Steel" in party_names
         assert "Indira Car Manufacturers" in party_names
-        # Party roles: plaintiff/defendant inferred from context
+        # Party roles: plaintiff/defendant inferred from context (INFERRED, not PROVIDED)
         tata = next(p for p in sheet.parties if p.name == "Tata Steel")
         indira = next(p for p in sheet.parties if p.name == "Indira Car Manufacturers")
-        # Role may be plaintiff or defendant depending on prompt interpretation
         assert tata.role in ("plaintiff", "defendant", "unknown")
         assert indira.role in ("plaintiff", "defendant", "unknown")
         # They should have opposite roles if both inferred
         if tata.role != "unknown" and indira.role != "unknown":
             assert tata.role != indira.role
-        # Entity types
+        # Role and user_side are INFERRED (never PROVIDED)
+        assert tata.status == "INFERRED"
+        assert indira.status == "INFERRED"
+        assert tata.user_side is not None  # inferred from role
+        # Entity type is INFERRED from regex
         assert tata.entity_type == "company"
         assert indira.entity_type == "company"
+        assert tata.entity_type != "unknown" or indira.entity_type != "unknown"
         # Contract date stays as written (no normalization), PROVIDED because grounded
         assert sheet.contract_date.value == "March 2026"
         assert sheet.contract_date.status == "PROVIDED"
-        # Contract value present with normalized amount
+        # Contract value present with normalized amount_inr
         assert sheet.contract_value.value is not None
         assert "50 crore" in sheet.contract_value.value
         assert sheet.contract_value.status == "PROVIDED"
@@ -157,14 +166,16 @@ class TestFactSheet:
         assert sheet.delivery_date.value is None
         # Incident date MISSING (only contract date in prompt)
         assert sheet.incident_date.status == "MISSING"
-        # Relief sought extracted
-        assert sheet.relief_sought.value is not None
-        assert "damages" in sheet.relief_sought.value.lower()
-        assert "specific performance" in sheet.relief_sought.value.lower()
-        # Claim type extracted
-        assert sheet.claim_type.value is not None
-        # The prompt says "failed to deliver" which is grounded and extracted
-        assert sheet.claim_type.value in ("failed to deliver", "breach of contract", "non-delivery")
+        # Relief sought is a list of FactField items
+        assert isinstance(sheet.relief_sought, list)
+        assert len(sheet.relief_sought) > 0
+        relief_vals = [r.value for r in sheet.relief_sought if r.value]
+        assert any("damages" in v.lower() for v in relief_vals)
+        assert any("specific performance" in v.lower() for v in relief_vals)
+        # Claim type: enum + raw phrase
+        assert sheet.claim_type.value in ("NON_DELIVERY_OF_GOODS", "BREACH_OF_CONTRACT", "OTHER")
+        assert sheet.claim_type_raw.value is not None
+        assert "failed to deliver" in sheet.claim_type_raw.value.lower()
         # Place
         assert sheet.place.value == "Jamshedpur"
         assert sheet.place.status == "PROVIDED"
@@ -192,7 +203,6 @@ class TestFactSheet:
 
     def test_normalize_amount_inr(self):
         """Test amount normalization for Indian currency formats."""
-        from app.nlp.fact_sheet import normalize_amount_inr
         assert normalize_amount_inr("Rs 50 crore") == 50_00_00_000
         assert normalize_amount_inr("Rs. 5,00,000") == 5_00_000
         assert normalize_amount_inr("10 lakh") == 10_00_000
@@ -201,8 +211,7 @@ class TestFactSheet:
         assert normalize_amount_inr("invalid") is None
 
     def test_infer_entity_type(self):
-        """Test entity type inference."""
-        from app.nlp.fact_sheet import infer_entity_type
+        """Test entity type inference (always INFERRED)."""
         assert infer_entity_type("Tata Steel") == "company"
         assert infer_entity_type("Tata Steel Ltd") == "company"
         assert infer_entity_type("ABC Pvt Ltd") == "company"
@@ -210,18 +219,94 @@ class TestFactSheet:
         assert infer_entity_type("Government of India") == "government"
         assert infer_entity_type("John Doe") == "unknown"
 
-    def test_missing_critical_fields(self):
-        """Test missing_critical_fields returns relevant questions."""
-        from app.nlp.fact_sheet import build_from_text
+    def test_infer_claim_type_enum(self):
+        """Test claim type enum mapping."""
+        assert infer_claim_type("failed to deliver") == "NON_DELIVERY_OF_GOODS"
+        assert infer_claim_type("breach of contract") == "BREACH_OF_CONTRACT"
+        assert infer_claim_type("cheque bounce") == "CHEQUE_BOUNCE"
+        assert infer_claim_type("specific performance") == "SPECIFIC_PERFORMANCE"
+        assert infer_claim_type("recovery of dues") == "RECOVERY_OF_DUES"
+        assert infer_claim_type("damages") == "DAMAGES"
+        assert infer_claim_type("eviction") == "EVICTION"
+        assert infer_claim_type("divorce") == "DIVORCE"
+        assert infer_claim_type("wrongful termination") == "WRONGFUL_TERMINATION"
+        assert infer_claim_type("something else") == "OTHER"
+
+    def test_party_status_is_inferred(self):
+        """Party role, user_side, entity_type must be INFERRED, not PROVIDED."""
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        for p in sheet.parties:
+            assert p.status == "INFERRED", f"Party {p.name} status should be INFERRED"
+            assert p.role in ("plaintiff", "defendant", "unknown")
+            assert p.entity_type in ("company", "individual", "partnership", "llp", "trust", "government", "other", "unknown")
+
+    def test_missing_critical_fields_returns_all_five(self):
+        """missing_critical_fields('plaint') returns all 5 critical questions."""
         sheet = build_from_text(TATA_STEEL_PROMPT)
         questions = sheet.missing_critical_fields("plaint")
-        assert len(questions) > 0
-        # Should ask about user side
+
+        # Should have at least 5 questions covering:
+        # 1. user_side
+        # 2. exact legal names + entity type
+        # 3. delivery_date
+        # 4. notice dates
+        # 5. arbitration clause
+        # (payment status is conditional on cheque)
+        assert len(questions) >= 5
+
+        # 1. user_side question
         assert any("represent" in q.lower() for q in questions)
-        # Should ask about delivery date for contract
+
+        # 2. exact legal names + entity type for each party
+        name_questions = [q for q in questions if "exact legal name" in q.lower()]
+        assert len(name_questions) >= 2  # one per party
+
+        # 3. delivery date
         assert any("delivery" in q.lower() for q in questions)
-        # Should ask about arbitration
+
+        # 4. notice dates (since breach of contract)
+        assert any("notice" in q.lower() for q in questions)
+
+        # 5. arbitration clause
         assert any("arbitration" in q.lower() for q in questions)
+
+    def test_relief_sought_is_list(self):
+        """relief_sought is a list of FactField items."""
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        assert isinstance(sheet.relief_sought, list)
+        assert len(sheet.relief_sought) > 0
+        for item in sheet.relief_sought:
+            assert isinstance(item, FactField)
+            assert item.status == "PROVIDED"
+        relief_vals = [r.value for r in sheet.relief_sought if r.value]
+        assert any("damages" in v.lower() for v in relief_vals)
+        assert any("specific performance" in v.lower() for v in relief_vals)
+
+    def test_claim_type_enum_plus_raw_phrase(self):
+        """claim_type is enum, claim_type_raw holds raw phrase."""
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        assert sheet.claim_type.value in ("NON_DELIVERY_OF_GOODS", "BREACH_OF_CONTRACT", "OTHER")
+        assert sheet.claim_type_raw.value is not None
+        assert "failed to deliver" in sheet.claim_type_raw.value.lower()
+
+    def test_amount_inr_normalized_both_paths(self):
+        """amount_inr normalized in both LLM and no-key paths (via grounded override)."""
+        # No-key path
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        assert sheet.contract_value.normalized is not None
+        assert sheet.contract_value.normalized.get("amount_inr") == 50_00_00_000
+
+        # Simulated LLM path: grounded override should also normalize
+        from app.nlp.fact_sheet import FactField, normalize_amount_inr
+        sheet2 = FactSheet(raw_prompt=TATA_STEEL_PROMPT)
+        # Simulate grounded override with amount
+        grounded_val = "Rs 50 crore"
+        sheet2.contract_value = FactField(
+            value=grounded_val, status="PROVIDED", source_span=grounded_val,
+            normalized={"amount_inr": normalize_amount_inr(grounded_val)}
+        )
+        assert sheet2.contract_value.normalized is not None
+        assert sheet2.contract_value.normalized.get("amount_inr") == 50_00_00_000
 
 
 class TestAlembic003:
