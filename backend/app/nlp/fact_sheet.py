@@ -358,7 +358,10 @@ def normalize_amount_inr(text: str) -> Optional[int]:
 
 
 def infer_entity_type(name: str) -> EntityType:
-    """Guess entity type from name. Always INFERRED."""
+    """Guess entity type from name. Always INFERRED.
+
+    Only returns "company" if the name contains a corporate suffix.
+    """
     n = name.lower()
     if any(k in n for k in ["ltd", "limited", "pvt", "private", "corp", "corporation", "inc", "company", "co "]):
         return "company"
@@ -370,9 +373,6 @@ def infer_entity_type(name: str) -> EntityType:
         return "trust"
     if any(k in n for k in ["govt", "government", "state", "municipal", "corporation", "authority", "board"]):
         return "government"
-    # Heuristic: all caps or contains "Steel", "Motors", "Industries" -> company
-    if name.isupper() or any(k in n for k in ["steel", "motors", "industries", "manufacturers", "enterprises"]):
-        return "company"
     return "unknown"
 
 
@@ -613,7 +613,7 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
         raw_phrase = claim_type_matches[0]
         enum_val = infer_claim_type(raw_phrase)
         sheet.claim_type = FactField(
-            value=enum_val, status="PROVIDED", source_span=raw_phrase
+            value=enum_val, status="INFERRED", source_span=raw_phrase
         )
         sheet.claim_type_raw = FactField(
             value=raw_phrase, status="PROVIDED", source_span=raw_phrase
