@@ -98,6 +98,9 @@ class CaseResponse(BaseModel):
     case_type: Optional[str]
     case_type_confidence: Optional[float]
     extracted_entities: Optional[Dict[str, Any]]
+    # Phase 1
+    raw_prompt: Optional[str] = None
+    fact_sheet: Optional[Dict[str, Any]] = None
     status: str
     created_at: datetime
     updated_at: datetime
