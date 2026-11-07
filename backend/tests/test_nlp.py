@@ -148,10 +148,9 @@ class TestFactSheet:
         assert tata.status == "INFERRED"
         assert indira.status == "INFERRED"
         assert tata.user_side is not None  # inferred from role
-        # Entity type is INFERRED from regex
-        assert tata.entity_type == "company"
-        assert indira.entity_type == "company"
-        assert tata.entity_type != "unknown" or indira.entity_type != "unknown"
+        # Entity type is INFERRED from regex - "Tata Steel" -> unknown (no corporate suffix), "Indira Car Manufacturers" -> unknown
+        assert tata.entity_type == "unknown"
+        assert indira.entity_type == "unknown"
         # Contract date stays as written (no normalization), PROVIDED because grounded
         assert sheet.contract_date.value == "March 2026"
         assert sheet.contract_date.status == "PROVIDED"
@@ -172,10 +171,12 @@ class TestFactSheet:
         relief_vals = [r.value for r in sheet.relief_sought if r.value]
         assert any("damages" in v.lower() for v in relief_vals)
         assert any("specific performance" in v.lower() for v in relief_vals)
-        # Claim type: enum + raw phrase
+        # Claim type: enum (INFERRED) + raw phrase (PROVIDED)
         assert sheet.claim_type.value in ("NON_DELIVERY_OF_GOODS", "BREACH_OF_CONTRACT", "OTHER")
+        assert sheet.claim_type.status == "INFERRED"
         assert sheet.claim_type_raw.value is not None
         assert "failed to deliver" in sheet.claim_type_raw.value.lower()
+        assert sheet.claim_type_raw.status == "PROVIDED"
         # Place
         assert sheet.place.value == "Jamshedpur"
         assert sheet.place.status == "PROVIDED"
@@ -211,13 +212,16 @@ class TestFactSheet:
         assert normalize_amount_inr("invalid") is None
 
     def test_infer_entity_type(self):
-        """Test entity type inference (always INFERRED)."""
-        assert infer_entity_type("Tata Steel") == "company"
+        """Test entity type inference (always INFERRED). Only returns company with corporate suffix."""
         assert infer_entity_type("Tata Steel Ltd") == "company"
+        assert infer_entity_type("Tata Steel Limited") == "company"
         assert infer_entity_type("ABC Pvt Ltd") == "company"
         assert infer_entity_type("XYZ LLP") == "llp"
         assert infer_entity_type("Government of India") == "government"
         assert infer_entity_type("John Doe") == "unknown"
+        # No corporate suffix -> unknown
+        assert infer_entity_type("Tata Steel") == "unknown"
+        assert infer_entity_type("Indira Car Manufacturers") == "unknown"
 
     def test_infer_claim_type_enum(self):
         """Test claim type enum mapping."""
@@ -283,30 +287,104 @@ class TestFactSheet:
         assert any("specific performance" in v.lower() for v in relief_vals)
 
     def test_claim_type_enum_plus_raw_phrase(self):
-        """claim_type is enum, claim_type_raw holds raw phrase."""
+        """claim_type is enum (INFERRED), claim_type_raw holds raw phrase (PROVIDED)."""
         sheet = build_from_text(TATA_STEEL_PROMPT)
         assert sheet.claim_type.value in ("NON_DELIVERY_OF_GOODS", "BREACH_OF_CONTRACT", "OTHER")
+        assert sheet.claim_type.status == "INFERRED"
         assert sheet.claim_type_raw.value is not None
         assert "failed to deliver" in sheet.claim_type_raw.value.lower()
+        assert sheet.claim_type_raw.status == "PROVIDED"
 
-    def test_amount_inr_normalized_both_paths(self):
-        """amount_inr normalized in both LLM and no-key paths (via grounded override)."""
-        # No-key path
+    def test_amount_inr_normalized_no_key_path(self):
+        """amount_inr normalized in no-key path."""
         sheet = build_from_text(TATA_STEEL_PROMPT)
         assert sheet.contract_value.normalized is not None
         assert sheet.contract_value.normalized.get("amount_inr") == 50_00_00_000
 
-        # Simulated LLM path: grounded override should also normalize
+    def test_amount_inr_normalized_llm_path(self):
+        """amount_inr normalized in LLM path via grounded override."""
         from app.nlp.fact_sheet import FactField, normalize_amount_inr
-        sheet2 = FactSheet(raw_prompt=TATA_STEEL_PROMPT)
-        # Simulate grounded override with amount
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        # Simulate grounded override with amount (as LLM extractor would do)
         grounded_val = "Rs 50 crore"
-        sheet2.contract_value = FactField(
+        sheet.contract_value = FactField(
             value=grounded_val, status="PROVIDED", source_span=grounded_val,
             normalized={"amount_inr": normalize_amount_inr(grounded_val)}
         )
-        assert sheet2.contract_value.normalized is not None
-        assert sheet2.contract_value.normalized.get("amount_inr") == 50_00_00_000
+        assert sheet.contract_value.normalized is not None
+        assert sheet.contract_value.normalized.get("amount_inr") == 50_00_00_000
+
+
+class TestSchemaParity:
+    """Golden test: both no-key and LLM paths produce identical FactSheet schema."""
+
+    def test_golden_schema_parity_tata_steel(self):
+        """Both paths produce same keys and value types for Tata Steel prompt."""
+        # No-key path
+        sheet_no_key = build_from_text(TATA_STEEL_PROMPT)
+
+        # Simulated LLM path (mocked LLM response, coerced into schema)
+        # Mock LLM response for Tata Steel
+        mock_llm_data = {
+            "petitioner_name": "Indira Car Manufacturers",
+            "respondent_name": "Tata Steel",
+            "contract_date": "March 2026",
+            "delivery_date": None,
+            "notice_dates": [],
+            "incident_date": None,
+            "contract_value": "Rs 50 crore",
+            "damages_claimed": None,
+            "place": "Jamshedpur",
+            "claim_type_raw": "failed to deliver",
+            "claim_type_enum": "NON_DELIVERY_OF_GOODS",
+            "statutes_cited_by_user": ["Section 73 of the Indian Contract Act"],
+            "relief_sought": ["damages", "specific performance"],
+            "has_arbitration_clause": "unknown",
+        }
+        # Build via extractor (which uses build_from_text + LLM override)
+        from app.nlp.extractor import _build_fact_sheet
+        sheet_llm = _build_fact_sheet(TATA_STEEL_PROMPT, mock_llm_data)
+
+        # Compare schemas - both should have same keys and value types
+        self._assert_same_schema(sheet_no_key, sheet_llm)
+
+        # Verify specific grounded values match
+        assert sheet_no_key.contract_date.value == sheet_llm.contract_date.value == "March 2026"
+        assert sheet_no_key.contract_value.value == sheet_llm.contract_value.value == "Rs 50 crore"
+        assert sheet_no_key.contract_value.normalized.get("amount_inr") == sheet_llm.contract_value.normalized.get("amount_inr") == 50_00_00_000
+        assert sheet_no_key.claim_type.value == sheet_llm.claim_type.value == "NON_DELIVERY_OF_GOODS"
+        assert sheet_no_key.claim_type.status == sheet_llm.claim_type.status == "INFERRED"
+        assert sheet_no_key.claim_type_raw.value == sheet_llm.claim_type_raw.value == "failed to deliver"
+        assert sheet_no_key.claim_type_raw.status == sheet_llm.claim_type_raw.status == "PROVIDED"
+
+    def _assert_same_schema(self, sheet1: FactSheet, sheet2: FactSheet):
+        """Assert both sheets have same field names and value types."""
+        # Compare all FactField attributes
+        for attr in dir(sheet1):
+            if attr.startswith("_"):
+                continue
+            v1 = getattr(sheet1, attr, None)
+            v2 = getattr(sheet2, attr, None)
+            # Skip methods
+            if callable(v1) or callable(v2):
+                continue
+            # Both should have same type
+            assert type(v1) is type(v2), f"Type mismatch for {attr}: {type(v1)} vs {type(v2)}"
+            if isinstance(v1, FactField):
+                # Check FactField structure
+                assert hasattr(v1, "value") and hasattr(v1, "status") and hasattr(v1, "source_span")
+                assert hasattr(v2, "value") and hasattr(v2, "status") and hasattr(v2, "source_span")
+            elif isinstance(v1, list) and v1 and isinstance(v1[0], FactField):
+                # List of FactField (relief_sought, notice_dates)
+                assert isinstance(v2, list)
+                if v1 and v2:
+                    assert isinstance(v1[0], FactField) and isinstance(v2[0], FactField)
+            elif isinstance(v1, list) and v1 and hasattr(v1[0], "name"):
+                # List of PartyFact (parties)
+                assert isinstance(v2, list)
+                if v1 and v2:
+                    assert hasattr(v1[0], "name") and hasattr(v1[0], "role") and hasattr(v1[0], "status")
+                    assert hasattr(v2[0], "name") and hasattr(v2[0], "role") and hasattr(v2[0], "status")
 
 
 class TestAlembic003:

@@ -202,7 +202,7 @@ def _build_fact_sheet(raw_prompt: str, llm_data: Optional[Dict], entities: Optio
                 FactField(value=val, status="PROVIDED", source_span=val, normalized=normalized),
             )
 
-    # claim_type: enum + raw phrase
+    # claim_type: enum (INFERRED) + raw phrase (PROVIDED)
     claim_enum = llm_data.get("claim_type_enum")
     claim_raw = llm_data.get("claim_type_raw")
     if claim_raw and is_grounded(claim_raw, raw_prompt):
@@ -212,7 +212,7 @@ def _build_fact_sheet(raw_prompt: str, llm_data: Optional[Dict], entities: Optio
             "SPECIFIC_PERFORMANCE", "RECOVERY_OF_DUES", "DAMAGES", "EVICTION",
             "DIVORCE", "TERMINATION", "WRONGFUL_TERMINATION", "OTHER"
         ]:
-            sheet.claim_type = FactField(value=claim_enum, status="PROVIDED", source_span=claim_raw)
+            sheet.claim_type = FactField(value=claim_enum, status="INFERRED", source_span=claim_raw)
 
     # relief_sought: list of items
     relief_arr = llm_data.get("relief_sought") or []
