@@ -92,12 +92,6 @@ def is_statute_whitelisted(citation: str) -> bool:
     for ws in STATUTE_WHITELIST:
         if ws.lower() in citation_lower:
             return True
-    # Also check abbreviated forms
-    for ws in STATUTE_WHITELIST:
-        key = ws.lower()
-        if "section" in key and "section" in citation_lower:
-            # Extract section numbers and act
-            return True
     return False
 
 
@@ -214,6 +208,13 @@ def validate_draft(
                 contract_val = val
             else:
                 damages_val = val
+        elif field and field.value:
+            amt = normalize_amount(field.value)
+            if amt:
+                if field_name == "contract_value":
+                    contract_val = amt
+                else:
+                    damages_val = amt
 
     if contract_val is not None and damages_val is not None:
         if contract_val == damages_val:
@@ -231,6 +232,7 @@ def validate_draft(
             "Draft cites 'specific performance under Section 73' — Section 73 applies to damages only. "
             "Specific performance is under Specific Relief Act ss.10/14/16. Cite correct sections."
         )
+        review_notes.append("Section 73 applies to damages only; specific performance is under SRA ss.10/14/16.")
 
     # 7. Check for invented party names (names not in FactSheet)
     # Simple heuristic: capitalized phrases not in known names
