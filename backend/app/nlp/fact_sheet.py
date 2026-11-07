@@ -230,6 +230,35 @@ _STATUTE_RE = re.compile(
     r"[A-Z][\w\s]*Act(?:\s+\d{4})?)?\b",
     re.IGNORECASE,
 )
+# Organization pattern: capitalized phrases that look like company/party names.
+# Matches sequences like "Tata Steel", "Indira Car Manufacturers", "ABC Ltd", etc.
+_ORG_RE = re.compile(
+    r"\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*(?:\s+(?:Ltd|Limited|Pvt|Private|Corp|Corporation|Inc|Company|Co|Manufacturers|Industries|Enterprises|Steel|Motors|Bank|Ltd\.|Pvt\.))?)\b"
+)
+
+# Contract date pattern: "contract dated X", "agreement dated X", "executed on X", etc.
+_CONTRACT_DATE_RE = re.compile(
+    r"\b(?:contract|agreement|deed|instrument)\s+(?:dated|executed|signed)\s+"
+    r"([A-Z][A-Za-z]+(?:\s+\d{1,2})?(?:\s*,?\s*\d{2,4})?)",
+    re.IGNORECASE,
+)
+
+def _extract_orgs(text: str) -> List[str]:
+    """Extract potential organization names from text using regex."""
+    found = []
+    for match in _ORG_RE.finditer(text):
+        name = match.group(1).strip()
+        # Filter out common false positives
+        if name.lower() not in {
+            "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "as", "by",
+            "section", "act", "court", "judge", "law", "legal", "case", "contract",
+            "goods", "damages", "performance", "specific", "indian",
+            "rs", "crore", "lakh", "worth", "failed", "deliver", "per", "dated",
+            "seeking", "under", "march", "jamshedpur"
+        } and len(name) > 2:
+            found.append(name)
+    # Deduplicate preserving order
+    return list(dict.fromkeys(found))
 
 
 def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) -> FactSheet:
@@ -244,6 +273,8 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
 
     persons = [p for p in (entities.get("persons") or []) if p]
     orgs = [o for o in (entities.get("organizations") or []) if o]
+    if not orgs:
+        orgs = _extract_orgs(prompt)
 
     parties: List[PartyFact] = []
     for p in persons[:1]:
@@ -271,10 +302,20 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
     if not statutes:
         statutes = [m.group(0).strip() for m in _STATUTE_RE.finditer(prompt)]
 
+    # Contract date: look for "contract dated X", "agreement dated X", etc.
+    contract_dates = [m.group(1).strip() for m in _CONTRACT_DATE_RE.finditer(prompt)]
+    # Exclude contract_date from general dates to avoid using it as incident_date
+    if contract_dates and dates:
+        dates = [d for d in dates if not is_grounded(d, contract_dates[0])]
+
     sheet = FactSheet(raw_prompt=prompt)
     sheet.parties = parties
     sheet.statutes_cited_by_user = list(dict.fromkeys(statutes))
 
+    if contract_dates:
+        sheet.contract_date = FactField(
+            value=contract_dates[0], status="INFERRED", source_span=contract_dates[0]
+        )
     if money:
         sheet.contract_value = FactField(
             value=money[0], status="INFERRED", source_span=money[0]
