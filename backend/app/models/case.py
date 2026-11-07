@@ -28,6 +28,10 @@ class Case(Base):
     case_type_confidence: Mapped[float] = mapped_column(Float, nullable=True)
     extracted_entities: Mapped[dict] = mapped_column(JSON, nullable=True)
 
+    # Phase 1: raw prompt + structured FactSheet
+    raw_prompt: Mapped[str] = mapped_column(Text, nullable=True)
+    fact_sheet: Mapped[dict] = mapped_column(JSON, nullable=True)
+
     # Processing state
     status: Mapped[str] = mapped_column(String(50), default="pending")
     # Statuses: pending | processing | completed | failed

@@ -22,7 +22,6 @@ from app.db.redis_client import (
 from app.models.case import Case, Draft
 from app.models.user import User
 from app.schemas.case import (
-    MAX_DESCRIPTION_CHARS,
     MAX_RELIEF_CHARS,
     SECTION_NAMES,
     CaseSubmit,
@@ -131,31 +130,65 @@ class CaseService:
         return case
 
     async def create_case_from_prompt(self, prompt: str, user: User) -> Case:
-        """Create a case from a free-form prompt using LLM field extraction."""
+        """Create a case from a free-form prompt using LLM field extraction.
+
+        Stores the raw prompt and the structured FactSheet for later use by
+        the generator and validator.
+        """
         from app.nlp.extractor import extract_case_fields
+        from app.nlp.pipeline import NLPPipeline
 
-        fields = await asyncio.to_thread(extract_case_fields, prompt) or {}
+        # Get NER entities for the fallback builder
+        entities = {}
+        try:
+            # This is a lightweight call; the full pipeline loads heavy components lazily
+            nlp = NLPPipeline()
+            await nlp.wait_until_loaded(timeout=10.0)
+            if nlp.nlp:
+                # Reuse the extractor's grounding if spaCy is available
+                text = prompt
+                if nlp.ner:
+                    entities = nlp.ner.extract(text)
+        except Exception:
+            # Best effort — entities just improve the deterministic fallback
+            pass
 
-        description = _clip(fields.get("case_description"), MAX_DESCRIPTION_CHARS)
-        if not description or len(description) < 30:
-            description = prompt
-        title = _clip(fields.get("title"), 500)
-        if not title or len(title) < 5:
-            title = prompt[:57] + "..."
+        fact_sheet = await asyncio.to_thread(extract_case_fields, prompt, entities)
 
-        # Every value is clipped to its column size: an over-long model answer must not turn
-        # into a database error.
+        # Build the display fields from the FactSheet
+        parties = fact_sheet.parties
+        petitioner = parties[0].name if len(parties) > 0 else None
+        respondent = parties[1].name if len(parties) > 1 else None
+
+        # Use the original prompt as description if extraction produced nothing usable
+        description = fact_sheet.raw_prompt
+
+        title = fact_sheet.raw_prompt[:57] + "..." if fact_sheet.raw_prompt else "Untitled"
+        if petitioner and respondent:
+            title = f"{petitioner} vs {respondent}"[:500]
+
         payload = CaseSubmit(
             title=title,
-            jurisdiction=_clip(fields.get("jurisdiction"), 200),
-            petitioner_name=_clip(fields.get("petitioner_name"), 300),
-            respondent_name=_clip(fields.get("respondent_name"), 300),
-            incident_date=_clip(fields.get("incident_date"), 50),
+            jurisdiction=_clip(fact_sheet.place.value, 200),
+            petitioner_name=_clip(petitioner, 300),
+            respondent_name=_clip(respondent, 300),
+            incident_date=_clip(fact_sheet.incident_date.value, 50),
             case_description=description,
-            sections_alleged=_clip(fields.get("sections_alleged"), 500),
-            relief_sought=_clip(fields.get("relief_sought"), MAX_RELIEF_CHARS),
+            sections_alleged=_clip(
+                ", ".join(fact_sheet.statutes_cited_by_user) if fact_sheet.statutes_cited_by_user else None,
+                500
+            ),
+            relief_sought=_clip(fact_sheet.relief_sought.value, MAX_RELIEF_CHARS),
         )
-        return await self.create_case(payload, user)
+        case = await self.create_case(payload, user)
+
+        # Store raw_prompt and fact_sheet on the case
+        case.raw_prompt = fact_sheet.raw_prompt
+        case.fact_sheet = fact_sheet.model_dump(mode="json")
+        await self.db.commit()
+        await self.db.refresh(case)
+
+        return case
 
     async def process_case(
         self, case_id: str, nlp_pipeline, strict: bool = False
@@ -186,6 +219,9 @@ class CaseService:
                     "incident_date": case.incident_date,
                     "jurisdiction": case.jurisdiction,
                     "relief_sought": case.relief_sought,
+                    # Phase 1: pass FactSheet and raw_prompt
+                    "raw_prompt": case.raw_prompt,
+                    "fact_sheet": case.fact_sheet,
                 }
 
                 # Run full NLP pipeline (no DB connection is held while this runs: the commit

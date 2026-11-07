@@ -110,6 +110,45 @@ class NLPPipeline:
         classification: Dict,
         rag_context: str = "",
     ) -> Dict:
+        """Build the generation context from FactSheet (preferred) or legacy fields."""
+        # Phase 1: Prefer FactSheet when available
+        fact_sheet = case_input.get("fact_sheet")
+        raw_prompt = case_input.get("raw_prompt")
+
+        if fact_sheet and isinstance(fact_sheet, dict):
+            # Convert dict back to FactSheet-like access
+            # (we don't need the full model, just the dict structure)
+            fs = fact_sheet
+            parties = fs.get("parties", [])
+
+            return {
+                "case_type": classification["case_type"],
+                "petitioner": parties[0].get("name") if parties else case_input.get("petitioner_name", "Petitioner"),
+                "respondent": parties[1].get("name") if len(parties) > 1 else case_input.get("respondent_name", "Respondent"),
+                "court": entities.get("courts", [None])[0]
+                or f"Hon'ble {case_input.get('jurisdiction') or 'High Court'}",
+                "description": preprocessed["cleaned"],
+                "statutes": list(dict.fromkeys(
+                    fs.get("statutes_cited_by_user", []) + preprocessed.get("legal_sections", [])
+                )),
+                "dates": fs.get("notice_dates", []),
+                "incident_date": fs.get("incident_date", {}).get("value") or case_input.get("incident_date") or "the relevant date",
+                "location": fs.get("place", {}).get("value") or case_input.get("jurisdiction") or "India",
+                "relief_sought": fs.get("relief_sought", {}).get("value") or case_input.get("relief_sought") or "appropriate relief as deemed fit",
+                "money": entities.get("money", []),
+                "rag_context": rag_context,
+                # FactSheet fields for the generator
+                "contract_date": fs.get("contract_date", {}).get("value"),
+                "delivery_date": fs.get("delivery_date", {}).get("value"),
+                "contract_value": fs.get("contract_value", {}).get("value"),
+                "damages_claimed": fs.get("damages_claimed", {}).get("value"),
+                "claim_type": fs.get("claim_type", {}).get("value"),
+                "has_arbitration_clause": fs.get("has_arbitration_clause", {}).get("value"),
+                "raw_prompt": raw_prompt,
+                "fact_sheet": fs,
+            }
+
+        # Legacy fallback
         locations = entities.get("locations", [])
         courts = entities.get("courts", [])
         persons = entities.get("persons", [])
