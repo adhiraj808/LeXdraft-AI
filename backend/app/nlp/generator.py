@@ -1,3 +1,5 @@
+"""Legal Draft Generator — Phase 2: FactSheet-driven, review notes, MISSING placeholders."""
+
 import asyncio
 import datetime
 import importlib.util
@@ -8,6 +10,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from app.core.config import settings
+from app.nlp.fact_sheet import missing_marker
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +263,7 @@ class LegalDraftGenerator:
     def _generate_with_llm(self, section: str, ctx: Dict) -> Optional[str]:
         """Draft one section with the local GGUF model (same prompt as the cloud path)."""
         messages = [
-            {"role": "system", "content": "You are an expert Indian legal draftsman."},
+            {"role": "system", "content": "You are an expert Indian legal draftsman. Temperature 0.2 — be precise and factual."},
             {"role": "user", "content": self._section_prompt(section, ctx)},
         ]
         try:
@@ -269,7 +272,7 @@ class LegalDraftGenerator:
                 output = self.llm.create_chat_completion(
                     messages=messages,
                     max_tokens=min(1024, max(256, settings.GGUF_CONTEXT_WINDOW // 2)),
-                    temperature=0.7,
+                    temperature=0.2,
                     top_p=0.9,
                 )
             text = (output["choices"][0]["message"].get("content") or "").strip()
@@ -286,33 +289,135 @@ class LegalDraftGenerator:
         formatted for the right legal category (Civil / Criminal / ...).
         """
         case_type = self.check_case_type(ctx)
-        p = ctx.get("petitioner", "The Petitioner")
-        r = ctx.get("respondent", "The Respondent")
-        court = ctx.get("court", "HON'BLE COURT")
-        loc = ctx.get("location", "Delhi")
-        desc = ctx.get("description", "")
-        relief = ctx.get("relief_sought", "")
-        sl = ctx.get("statutes", [])
-        stat = ", ".join(sl) if sl else "applicable provisions of law"
-        rag = ctx.get("rag_context", "")
+
+        # Prefer FactSheet when available
+        fact_sheet = ctx.get("fact_sheet")
+        raw_prompt = ctx.get("raw_prompt", "")
+
+        if fact_sheet and isinstance(fact_sheet, dict):
+            fs = fact_sheet
+            parties = fs.get("parties", [])
+            petitioner = parties[0].get("name") if parties else ctx.get("petitioner", "Petitioner")
+            respondent = parties[1].get("name") if len(parties) > 1 else ctx.get("respondent", "Respondent")
+
+            # Use exact party names as typed (no suffixes added)
+            p = petitioner
+            r = respondent
+
+            # Party roles from FactSheet (INFERRED)
+            pet_role = parties[0].get("role", "plaintiff") if parties else "plaintiff"
+            resp_role = parties[1].get("role", "defendant") if len(parties) > 1 else "defendant"
+
+            # Relief sought as list
+            relief_items = fs.get("relief_sought", [])
+            relief_text = "; ".join([r.get("value") for r in relief_items if r.get("value")]) if relief_items else ctx.get("relief_sought", "")
+
+            # Statutes from FactSheet (whitelisted only)
+            statutes = fs.get("statutes_cited_by_user", [])
+            stat = ", ".join(statutes) if statutes else "applicable provisions of law"
+
+            # Claim type
+            claim_type_raw = fs.get("claim_type_raw", {}).get("value", "")
+            claim_type_enum = fs.get("claim_type", {}).get("value", "")
+
+            # Contract/incident dates
+            contract_date = fs.get("contract_date", {}).get("value")
+            incident_date = fs.get("incident_date", {}).get("value") or fs.get("contract_date", {}).get("value")
+
+            # Money
+            contract_value = fs.get("contract_value", {}).get("value")
+            damages_claimed = fs.get("damages_claimed", {}).get("value")
+
+            # Place
+            location = fs.get("place", {}).get("value")
+
+            # Court
+            court = ctx.get("court", "HON'BLE COURT")
+
+            # Description
+            desc = ctx.get("description", "")
+        else:
+            # Legacy fallback
+            p = ctx.get("petitioner", "Petitioner")
+            r = ctx.get("respondent", "Respondent")
+            court = ctx.get("court", "HON'BLE COURT")
+            loc = ctx.get("location", "Delhi")
+            desc = ctx.get("description", "")
+            relief = ctx.get("relief_sought", "appropriate relief as deemed fit")
+            sl = ctx.get("statutes", [])
+            stat = ", ".join(sl) if sl else "applicable provisions of law"
+            p_label = "Plaintiff"
+            r_label = "Defendant"
+            contract_date = ctx.get("contract_date")
+            incident_date = ctx.get("incident_date")
+            contract_value = ctx.get("contract_value")
+            damages_claimed = ctx.get("damages_claimed")
+            location = ctx.get("location", "Delhi")
+            claim_type_raw = ""
+            claim_type_enum = ""
+            relief_items = []
+
         type_instruction = self.CASE_TYPE_INSTRUCTIONS.get(case_type, "")
-        # Free-text instructions typed next to "Regenerate" in the UI.
-        extra = (ctx.get("additional_context") or "").strip()
-        extra_block = (
-            f"Additional instructions from the drafter: {extra}\n" if extra else ""
-        )
-        return (
-            f"You are an expert Indian legal draftsman. Draft ONLY the "
-            f"'{section.replace('_', ' ')}' section of a legal pleading for a "
-            f"{case_type} case in India, using proper format and terminology.\n"
-            f"Category instruction: {type_instruction}\n"
-            f"Case Type: {case_type}\nPetitioner: {p}\nRespondent: {r}\n"
-            f"Court: {court}\nLocation: {loc}\nFacts: {desc}\n"
-            f"Relief Sought: {relief}\nStatutes: {stat}\n"
-            f"Relevant precedents:\n{rag}\n"
-            f"{extra_block}"
-            f"Output the section text only, no explanations."
-        )
+
+        # Build the prompt with FactSheet data
+        prompt_parts = [
+            "You are an expert Indian legal draftsman. Draft ONLY the",
+            f"'{section.replace('_', ' ')}' section of a legal pleading for a",
+            f"{case_type} case in India, using proper format and terminology.",
+            "",
+            f"Category instruction: {type_instruction}",
+            f"Case Type: {case_type}",
+        ]
+
+        # Party info with exact names from FactSheet
+        prompt_parts.append(f"Petitioner: {p}")
+        prompt_parts.append(f"Respondent: {r}")
+        prompt_parts.append(f"Party Roles (INFERRED): Petitioner={pet_role if 'pet_role' in locals() else 'plaintiff'}, Respondent={resp_role if 'resp_role' in locals() else 'defendant'}")
+        prompt_parts.append("IMPORTANT: Use party names EXACTLY as given above. Do not add 'Ltd', 'Pvt Ltd', 'Limited', or any suffixes.")
+        prompt_parts.append("REVIEW NOTE: Exact legal names and entity types to be confirmed.")
+
+        prompt_parts.append(f"Court: {court}")
+        prompt_parts.append(f"Location: {location}")
+        prompt_parts.append(f"Facts: {desc}")
+
+        if contract_date:
+            prompt_parts.append(f"Contract Date: {contract_date}")
+        if incident_date:
+            prompt_parts.append(f"Incident Date: {incident_date}")
+        if contract_value:
+            prompt_parts.append(f"Contract Value: {contract_value}")
+        if damages_claimed:
+            prompt_parts.append(f"Damages Claimed: {damages_claimed}")
+        else:
+            prompt_parts.append("Damages Claimed: [TO BE CONFIRMED: damages claimed]")
+
+        prompt_parts.append(f"Claim Type: {claim_type_enum if claim_type_enum else 'Unknown'}")
+        if claim_type_raw:
+            prompt_parts.append(f"Claim Description: {claim_type_raw}")
+
+        prompt_parts.append(f"Statutes Cited: {stat}")
+        prompt_parts.append("IMPORTANT: Cite ONLY whitelisted statutes. Do not cite Section 73 for specific performance.")
+        prompt_parts.append("REVIEW NOTE: Section 73 applies to damages only; specific performance is under SRA ss.10/14/16.")
+
+        if relief_items:
+            prompt_parts.append(f"Relief Sought: {relief_text}")
+
+        prompt_parts.append(f"Relevant precedents:\n{ctx.get('rag_context', '')}")
+        prompt_parts.append("")
+        prompt_parts.append("OUTPUT RULES:")
+        prompt_parts.append("1. Use ONLY facts from this prompt. Never invent names, dates, amounts, clause numbers, addresses, or witnesses.")
+        prompt_parts.append("2. For any MISSING fact, write [TO BE CONFIRMED: field name] exactly.")
+        prompt_parts.append("3. Party names must match EXACTLY as given. No added suffixes (Ltd, Pvt Ltd, etc.).")
+        prompt_parts.append("4. Contract value and damages claimed are SEPARATE. Do not equate them.")
+        prompt_parts.append("5. Cite ONLY whitelisted statutes. Each relief must cite its correct section.")
+        prompt_parts.append("6. Do not list defendant's witnesses in plaintiff's witness list.")
+        prompt_parts.append("7. Statutes and case law are NOT exhibits.")
+        prompt_parts.append("8. No 'confirm jurisdiction' prayer.")
+        prompt_parts.append("9. Temperature 0.2 — be precise and factual.")
+        prompt_parts.append("")
+        prompt_parts.append("Output the section text only, no explanations.")
+
+        return "\n".join(prompt_parts)
 
     def _cloud_usable(self) -> bool:
         return bool(self.client and self.client.available)
@@ -340,14 +445,14 @@ class LegalDraftGenerator:
             return None
 
         messages = [
-            {"role": "system", "content": "You are an expert Indian legal draftsman."},
+            {"role": "system", "content": "You are an expert Indian legal draftsman. Temperature 0.2 — be precise and factual."},
             {"role": "user", "content": self._section_prompt(section, ctx)},
         ]
         for name in self._provider_order():
             client = self._clients[name]
             if not client.available or self._is_provider_failed(name):
                 continue
-            text = client.chat(messages, temperature=0.7, retries=retries)
+            text = client.chat(messages, temperature=0.2, retries=retries)
             if text:
                 return text, f"{name}:{client.model}"
             self._mark_provider_failed(name)
@@ -365,13 +470,31 @@ class LegalDraftGenerator:
     def _court_header(self, court, loc, cfg, yr):
         return f"IN THE COURT OF {court.upper()}\n{loc.upper()} COURTS\n\n{cfg['case_no_label']} …………..{yr}\n\n"
 
-    def _narrative_paragraphs(self, case_type, p, r, desc, inc, amt, stat, rn):
+    def _narrative_paragraphs(self, case_type, p, r, desc, inc, amt, stat, rn, fs=None, review_note_parties="", review_note_roles=""):
         """Case-type-specific cause-of-action narrative for the main pleading body."""
+        # MISSING placeholders
+        contract_date = self._get_fs_field(fs, "contract_date", "contract date") if fs else "contract date"
+        incident_date = self._get_fs_field(fs, "incident_date", "incident date") if fs else "incident date"
+        self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
+        self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "damages claimed"
+        self._get_fs_field(fs, "delivery_date", "delivery date") if fs else "delivery date"
+        self._get_fs_field(fs, "notice_dates", "notice date") if fs else "notice date"
+        self._get_fs_field(fs, "claim_type", "claim type") if fs else "claim type"
+        self._get_fs_field(fs, "place", "place") if fs else "place"
+        ", ".join(fs.get("statutes_cited_by_user", [])) if fs else "applicable provisions of law"
+
+        # For complaint body, use contract_value as amt, but separate damages
+        contract_amt = self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
+        damages_amt = self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "damages claimed"
+
+        # Use incident_date if available, else contract_date, else inc
+        effective_inc = incident_date if incident_date != "[TO BE CONFIRMED: incident date]" else (contract_date if contract_date != "[TO BE CONFIRMED: contract date]" else inc)
+
         if case_type == "Criminal":
             return (
                 f"1.\tThat the Complainant, {p}, through its Authorised Representative, is well conversant with the facts and circumstances of the present complaint and is duly authorised to represent and sign this complaint before this Hon’ble Court.\n\n"
                 f"2.\tThat the Complainant is a reputed firm/individual engaged in lawful business. The Accused, {r}, was known to the Complainant and the following events transpired between the parties:\n\n{desc}\n\n"
-                f"3.\tThat the Accused issued a cheque/instrument dated {inc} for a sum of {amt} in favour of the Complainant to discharge their lawful liability. The said instrument was duly presented for realisation but was returned/dishonoured. The original cheque is annexed as Annexure C and the cheque returning memo is annexed as Annexure D.\n\n"
+                f"3.\tThat the Accused issued a cheque/instrument dated {effective_inc} for a sum of {contract_amt} in favour of the Complainant to discharge their lawful liability. The said instrument was duly presented for realisation but was returned/dishonoured. The original cheque is annexed as Annexure C and the cheque returning memo is annexed as Annexure D.\n\n"
                 f"4.\tThat the Complainant caused a legal demand notice to be served upon the Accused. The Accused failed to pay within the stipulated 15 days. The copy of legal notice is annexed as Annexure E. The postal receipt and POD is annexed as Annexure F. The copy of email is annexed as Annexure G.\n\n"
                 f"5.\tThat the Accused is liable to be prosecuted u/s {stat}. The cause of action arose on each date of transaction, on dishonour of the cheque, and on failure to comply with the legal notice, all within the jurisdiction of this Hon’ble Court.\n\n"
                 f"6.\tThat this Hon’ble Court has full territorial and pecuniary jurisdiction to try and decide this complaint. The complaint is filed within the period of limitation under {stat}.{rn}"
@@ -381,14 +504,14 @@ class LegalDraftGenerator:
                 f"1.\tThat the Petitioner, {p}, is the lawfully wedded spouse of the Respondent, {r}, and is well conversant with the facts and circumstances of the present petition.\n\n"
                 f"2.\tThat the marriage between the parties was solemnised according to law, and the following events transpired during the subsistence of the marriage:\n\n{desc}\n\n"
                 f"3.\tThat the conduct of the Respondent, more particularly described above, amounts to cruelty/desertion within the meaning of {stat}, rendering it impossible for the Petitioner to continue to reside with the Respondent.\n\n"
-                f"4.\tThat the cause of action arose on {inc} and has continued since, within the territorial jurisdiction of this Hon’ble Court, where the parties last resided together / where the marriage was solemnised.\n\n"
+                f"4.\tThat the cause of action arose on {effective_inc} and has continued since, within the territorial jurisdiction of this Hon’ble Court, where the parties last resided together / where the marriage was solemnised.\n\n"
                 f"5.\tThat this Hon’ble Family Court has full jurisdiction to try and decide this petition under {stat}, and the petition is filed within the period of limitation, if any.{rn}"
             )
         if case_type == "Labour / Employment":
             return (
                 f"1.\tThat the Workman, {p}, was employed by the Management, {r}, and is well conversant with the facts and circumstances of the present petition.\n\n"
                 f"2.\tThat during the course of employment, the following events transpired leading to the present industrial dispute:\n\n{desc}\n\n"
-                f"3.\tThat the termination/dismissal of the Workman effected by the Management on {inc} was done without following the mandatory procedure, notice, and retrenchment compensation of {amt} required under {stat}, and is therefore illegal and void ab initio.\n\n"
+                f"3.\tThat the termination/dismissal of the Workman effected by the Management on {effective_inc} was done without following the mandatory procedure, notice, and retrenchment compensation of {contract_amt} required under {stat}, and is therefore illegal and void ab initio.\n\n"
                 f"4.\tThat the cause of action arose on the date of termination and continues, within the jurisdiction of this Hon’ble Labour Court/Industrial Tribunal.\n\n"
                 f"5.\tThat this Hon’ble Court/Tribunal has full jurisdiction to adjudicate this dispute under {stat}.{rn}"
             )
@@ -396,7 +519,7 @@ class LegalDraftGenerator:
             return (
                 f"1.\tThat the Petitioner, {p}, is a citizen of India whose fundamental/legal rights have been violated by the action of the Respondent, {r}, a State/statutory authority within the meaning of Article 12 of the Constitution.\n\n"
                 f"2.\tThat the facts giving rise to the violation are as under:\n\n{desc}\n\n"
-                f"3.\tThat the impugned action/order dated {inc} is in violation of {stat} and is liable to be quashed/set aside as being arbitrary, unconstitutional, and without authority of law.\n\n"
+                f"3.\tThat the impugned action/order dated {effective_inc} is in violation of {stat} and is liable to be quashed/set aside as being arbitrary, unconstitutional, and without authority of law.\n\n"
                 f"4.\tThat the Petitioner has no other equally efficacious remedy except to approach this Hon’ble Court by way of this writ petition, and the cause of action arose within the jurisdiction of this Hon’ble Court.\n\n"
                 f"5.\tThat this Hon’ble Court has jurisdiction to entertain this petition under {stat}.{rn}"
             )
@@ -404,7 +527,7 @@ class LegalDraftGenerator:
             return (
                 f"1.\tThat the Plaintiff, {p}, is the lawful owner/tenant in settled possession of the property described in the schedule hereto, and is well conversant with the facts and circumstances of the present suit.\n\n"
                 f"2.\tThat the Defendant, {r}, in respect of the said property, the following events transpired:\n\n{desc}\n\n"
-                f"3.\tThat on or about {inc}, the Defendant illegally interfered with/encroached upon/dispossessed the Plaintiff from the said property valued at {amt}, without due process of law, and continues to threaten the Plaintiff’s peaceful possession.\n\n"
+                f"3.\tThat on or about {effective_inc}, the Defendant illegally interfered with/encroached upon/dispossessed the Plaintiff from the said property valued at {contract_amt}, without due process of law, and continues to threaten the Plaintiff’s peaceful possession.\n\n"
                 f"4.\tThat the cause of action arose on the date of such illegal interference/dispossession and is continuing, and the suit property is situated within the jurisdiction of this Hon’ble Court.\n\n"
                 f"5.\tThat this Hon’ble Court has full territorial and pecuniary jurisdiction to try and decide this suit under {stat}.{rn}"
             )
@@ -412,12 +535,20 @@ class LegalDraftGenerator:
         return (
             f"1.\tThat the Plaintiff, {p}, through its Authorised Representative, is well conversant with the facts and circumstances of the present suit and is duly authorised to represent and sign the plaint before this Hon’ble Court.\n\n"
             f"2.\tThat the Defendant, {r}, was known to the Plaintiff, and the following events transpired between the parties:\n\n{desc}\n\n"
-            f"3.\tThat the Defendant breached the terms agreed between the parties on or about {inc}, causing loss and damages of {amt} to the Plaintiff, who is entitled to recover the same along with interest.\n\n"
+            f"3.\tThat the Defendant breached the terms agreed between the parties on or about {effective_inc}, causing loss and damages of {damages_amt if damages_amt != '[TO BE CONFIRMED: damages claimed]' else contract_amt} to the Plaintiff, who is entitled to recover the same along with interest.\n\n"
             f"4.\tThat the cause of action arose on the date of breach and continues, within the territorial and pecuniary jurisdiction of this Hon’ble Court.\n\n"
             f"5.\tThat this Hon’ble Court has full jurisdiction to try and decide this suit under {stat}, and the suit is filed within the period of limitation.{rn}"
         )
 
-    def _prayer_text(self, case_type, p, r, relief, stat):
+    def _prayer_text(self, case_type, p, r, relief, stat, fs=None, damages_claimed=None):
+        """Prayer section with MISSING placeholders and review notes."""
+        self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "damages claimed"
+        self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
+        self._get_fs_field(fs, "place", "place") if fs else "place"
+        ", ".join(fs.get("statutes_cited_by_user", [])) if fs else "applicable provisions of law"
+        self._get_fs_field(fs, "claim_type", "claim type") if fs else "claim type"
+
+
         if case_type == "Criminal":
             return (
                 f"\tIt is, therefore, most respectfully prayed that the Hon’ble Court may be pleased to take cognizance of this complaint and the Accused, {r}, may kindly be summoned, tried and punished for the offence committed u/s {stat} in accordance with law, in the interest of justice.\n\n"
@@ -448,59 +579,70 @@ class LegalDraftGenerator:
                 f"\t{relief}.\n\n"
                 f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Plaintiff, in the interest of justice."
             )
-        # Civil default
+        # Civil default - separate contract value and damages
         return (
-            f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit in favour of the Plaintiff and against the Defendant, {r}, for recovery of damages along with interest and costs under {stat}, in the interest of justice.\n\n"
+            f"\tIt is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit in favour of the Plaintiff and against the Defendant, {r}, for recovery of {damages_claimed} (damages claimed) and interest and costs under {stat}, in the interest of justice.\n\n"
             f"\t{relief}.\n\n"
             f"Any other or further order which this Hon’ble Court may deem fit and proper may also be passed in favour of the Plaintiff, in the interest of justice."
+            f"[REVIEW NOTE: Contract value and damages are separate. Do not equate them. Damages must be separately pleaded.]"
+            f"[REVIEW NOTE: Section 73 applies to damages only; specific performance is under SRA ss.10/14/16. Cite correct sections for each relief.]"
         )
 
-    def _witnesses_for(self, case_type, p):
+    def _witnesses_for(self, case_type, p, fs=None):
+        """Witness list - no defendant witnesses in plaintiff's list."""
         common_tail = ["Any other witness with the permission of this Hon’ble Court."]
+        p_name = p  # exact name from FactSheet
+
         if case_type == "Criminal":
             return [
-                f"Authorised Representative of the Complainant, {p}, who is well conversant with the facts and circumstances of the complaint.",
+                f"Authorised Representative of the Complainant, {p_name}, who is well conversant with the facts and circumstances of the complaint.",
                 "Clerk / Officer of the bank on which the cheque was drawn, with all relevant records.",
                 "Clerk / Officer of the bank where the cheque was deposited for realisation, with all relevant records.",
                 "Clerk / Officer of the concerned Post Office with relevant records.",
             ] + common_tail
         if case_type == "Family Law":
             return [
-                f"The Petitioner, {p}, in person.",
+                f"The Petitioner, {p_name}, in person.",
                 "Family members/relatives acquainted with the facts of the marriage and the conduct complained of.",
                 "Marriage counsellor / mediator, if any was engaged.",
             ] + common_tail
         if case_type == "Labour / Employment":
             return [
-                f"The Workman, {p}, in person.",
+                f"The Workman, {p_name}, in person.",
                 "Co-workers/colleagues with knowledge of the circumstances of termination.",
                 "Representative of the Trade Union, if applicable.",
                 "Officer of the Management with custody of service/personnel records.",
             ] + common_tail
         if case_type == "Constitutional":
             return [
-                f"The Petitioner, {p}, in person, on the basis of the accompanying affidavit.",
+                f"The Petitioner, {p_name}, in person, on the basis of the accompanying affidavit.",
                 "Officer of the Respondent authority with custody of the impugned order/records.",
             ] + common_tail
         if case_type == "Property Dispute":
             return [
-                f"The Plaintiff, {p}, in person.",
+                f"The Plaintiff, {p_name}, in person.",
                 "Neighbours/local residents acquainted with possession of the suit property.",
                 "Revenue/Municipal official with custody of land/property records.",
             ] + common_tail
-        # Civil default
+        # Civil default - NO defendant witnesses in plaintiff's list
         return [
-            f"Authorised Representative of the Plaintiff, {p}, who is well conversant with the facts and circumstances of the suit.",
+            f"Authorised Representative of the Plaintiff, {p_name}, who is well conversant with the facts and circumstances of the suit.",
             "Witness(es) to the transaction/agreement between the parties.",
             "Any expert witness, if required.",
         ] + common_tail
 
-    def _documents_for(self, case_type, amt, inc):
+    def _documents_for(self, case_type, amt, inc, fs=None):
+        """Documents list with MISSING placeholders. Statutes/case law NOT listed as exhibits."""
+        self._get_fs_field(fs, "contract_value", "contract value") if fs else amt
+        contract_date = self._get_fs_field(fs, "contract_date", "contract date") if fs else "contract date"
+        contract_amt = self._get_fs_field(fs, "contract_value", "contract value") if fs else amt
+        incident_date = self._get_fs_field(fs, "incident_date", "incident date") if fs else "incident date"
+
         if case_type == "Criminal":
             return [
                 "Resolution / Authority letter authorising the AR",
-                f"Copies of invoices / bills / ledger account showing dues of {amt}",
-                f"Original cheque for {amt} dated {inc}",
+                f"Copies of invoices / bills / ledger account showing dues of {contract_amt}",
+                f"Original cheque for {contract_amt} dated {contract_date}",
                 "Original cheque returning / dishonour memo from bank",
                 "Copy of legal demand notice issued to the Accused",
                 "Original postal receipt and Proof of Delivery (POD)",
@@ -518,7 +660,7 @@ class LegalDraftGenerator:
         if case_type == "Labour / Employment":
             return [
                 "Appointment letter / employment contract",
-                f"Termination/dismissal order dated {inc}",
+                f"Termination/dismissal order dated {incident_date}",
                 "Salary slips and proof of wages last drawn",
                 "Identity proof / employee ID",
                 "Any other document as may be permitted by this Hon’ble Court/Tribunal",
@@ -534,23 +676,28 @@ class LegalDraftGenerator:
             return [
                 "Sale deed / title documents of the suit property",
                 "Mutation extract / revenue records",
-                f"Property valuation of {amt} and tax receipts",
+                f"Property valuation of {contract_amt} and tax receipts",
                 "Site plan of the suit property",
                 "Any other document as may be permitted by this Hon’ble Court",
             ]
-        # Civil default
+        # Civil default - statutes and case law are NOT exhibits
         return [
             "Agreement / contract between the parties",
             "Correspondence exchanged between the parties",
-            f"Ledger account / invoices showing dues of {amt}",
+            f"Ledger account / invoices showing dues of {contract_amt}",
             "Copy of legal notice, if any was issued",
             "Any other document as may be permitted by this Hon’ble Court",
         ]
 
-    def _affidavit_body(self, case_type, p, inc, amt, stat):
+    def _affidavit_body(self, case_type, p, inc, amt, stat, fs=None):
+        self._get_fs_field(fs, "contract_value", "contract value") if fs else amt
+        incident_date = self._get_fs_field(fs, "incident_date", "incident date") if fs else "incident date"
+        self._get_fs_field(fs, "contract_date", "contract date") if fs else "contract date"
+        contract_amt = self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
+
         if case_type == "Criminal":
             return (
-                f"1.\tThat the deponent is the Authorised Representative of the Complainant who has filed the above complaint with regard to the cheque dated {inc} for a sum of {amt}.\n\n"
+                f"1.\tThat the deponent is the Authorised Representative of the Complainant who has filed the above complaint with regard to the cheque dated {incident_date} for a sum of {contract_amt}.\n\n"
                 f"2.\tThat the Complainant has not filed any other complaint/case regarding the dishonoring of the above said cheque in any other court except the present complaint. The contents of the accompanying complaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
             )
         if case_type == "Family Law":
@@ -560,31 +707,38 @@ class LegalDraftGenerator:
             )
         if case_type == "Labour / Employment":
             return (
-                f"1.\tThat the deponent is the Workman who has filed the above petition with regard to the termination dated {inc} under {stat}.\n\n"
+                f"1.\tThat the deponent is the Workman who has filed the above petition with regard to the termination dated {incident_date} under {stat}.\n\n"
                 f"2.\tThat the deponent has not raised this industrial dispute in any other forum except the present proceedings. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
             )
         if case_type == "Constitutional":
             return (
-                f"1.\tThat the deponent is the Petitioner who has filed the above writ petition in respect of the impugned action dated {inc} under {stat}.\n\n"
+                f"1.\tThat the deponent is the Petitioner who has filed the above writ petition in respect of the impugned action dated {incident_date} under {stat}.\n\n"
                 f"2.\tThat the deponent has not filed any other petition seeking the same relief in any other court except the present petition. The contents of the accompanying petition may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
             )
         if case_type == "Property Dispute":
             return (
-                f"1.\tThat the deponent is the Plaintiff who has filed the above suit with regard to the property and the dispossession/interference dated {inc} valued at {amt}.\n\n"
+                f"1.\tThat the deponent is the Plaintiff who has filed the above suit with regard to the property and the dispossession/interference dated {incident_date} valued at {contract_amt}.\n\n"
                 f"2.\tThat the deponent has not filed any other suit seeking the same relief in any other court except the present suit. The contents of the accompanying plaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
             )
         # Civil default
         return (
-            f"1.\tThat the deponent is the Authorised Representative of the Plaintiff who has filed the above suit with regard to the breach dated {inc} and damages of {amt}.\n\n"
+            f"1.\tThat the deponent is the Authorised Representative of the Plaintiff who has filed the above suit with regard to the breach dated {incident_date} and damages of {contract_amt}.\n\n"
             f"2.\tThat the Plaintiff has not filed any other suit seeking the same relief in any other court except the present suit. The contents of the accompanying plaint may kindly be read as part and parcel of this affidavit as the same are not being repeated herein for the sake of brevity."
         )
 
-    def _evidence_body(self, case_type, sd, inc, amt, stat):
+    def _evidence_body(self, case_type, sd, inc, amt, stat, fs=None):
+        self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
+        self._get_fs_field(fs, "contract_date", "contract date") if fs else "contract date"
+        incident_date = self._get_fs_field(fs, "incident_date", "incident date") if fs else "incident date"
+        contract_amt = self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
+        self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "damages claimed"
+        self._get_fs_field(fs, "place", "place") if fs else "place"
+
         if case_type == "Criminal":
             return (
                 f"1.\tI am well conversant with the facts and circumstances of the complaint and am duly authorised to represent the firm before this Hon’ble Court. The Original resolution is exhibited as EX. CW-1/1.\n\n"
                 f"2.\t{sd}\n\tThe copy of ledger account / invoices is exhibited as EX. CW-1/2.\n\n"
-                f"3.\tThat the Accused issued a cheque dated {inc} for a sum of {amt} in favour of the Complainant which was dishonoured. The original cheque is exhibited as EX. CW-1/3 and the dishonour memo is exhibited as EX. CW-1/4.\n\n"
+                f"3.\tThat the Accused issued a cheque dated {incident_date} for a sum of {contract_amt} in favour of the Complainant which was dishonoured. The original cheque is exhibited as EX. CW-1/3 and the dishonour memo is exhibited as EX. CW-1/4.\n\n"
                 f"4.\tThat the legal demand notice was duly served upon the Accused who failed to pay within 15 days. Legal notice is exhibited as EX. CW-1/5. Postal receipt and POD is exhibited as EX. CW-1/6. Email copy is exhibited as EX. CW-1/7.\n\n"
                 f"5.\tThat the Accused is liable to be prosecuted u/s {stat}. I hereby close my pre-summoning evidence. My statements are true and correct."
             )
@@ -592,37 +746,53 @@ class LegalDraftGenerator:
             return (
                 f"1.\tI am well conversant with the facts and circumstances of the petition and the marriage between the parties.\n\n"
                 f"2.\t{sd}\n\tThe copy of marriage certificate is exhibited as EX. PW-1/1.\n\n"
-                f"3.\tThat the cruelty/desertion described above occurred on or about {inc}, rendering it impossible for me to continue to reside with the Respondent. Supporting photographs/correspondence are exhibited as EX. PW-1/2.\n\n"
+                f"3.\tThat the cruelty/desertion described above occurred on or about {incident_date}, rendering it impossible for me to continue to reside with the Respondent. Supporting photographs/correspondence are exhibited as EX. PW-1/2.\n\n"
                 f"4.\tThat I am entitled to the relief sought under {stat}. I hereby close my evidence. My statements are true and correct."
             )
         if case_type == "Labour / Employment":
             return (
                 f"1.\tI am well conversant with the facts and circumstances of the petition and the terms of my employment.\n\n"
                 f"2.\t{sd}\n\tThe copy of appointment letter is exhibited as EX. WW-1/1.\n\n"
-                f"3.\tThat my services were terminated on {inc} without notice or retrenchment compensation of {amt}, in violation of {stat}. The termination order is exhibited as EX. WW-1/2.\n\n"
+                f"3.\tThat my services were terminated on {incident_date} without notice or retrenchment compensation of {contract_amt}, in violation of {stat}. The termination order is exhibited as EX. WW-1/2.\n\n"
                 f"4.\tThat I am entitled to reinstatement and back wages under {stat}. I hereby close my evidence. My statements are true and correct."
             )
         if case_type == "Constitutional":
             return (
                 f"1.\tI am well conversant with the facts and circumstances of the writ petition.\n\n"
                 f"2.\t{sd}\n\tThe copy of the impugned order is exhibited as EX. PW-1/1.\n\n"
-                f"3.\tThat the impugned action dated {inc} violates {stat}, and I have exhausted the available remedies before approaching this Hon’ble Court. Supporting representations are exhibited as EX. PW-1/2.\n\n"
+                f"3.\tThat the impugned action dated {incident_date} violates {stat}, and I have exhausted the available remedies before approaching this Hon’ble Court. Supporting representations are exhibited as EX. PW-1/2.\n\n"
                 f"4.\tThat I am entitled to the relief sought. I hereby close my evidence. My statements are true and correct."
             )
         if case_type == "Property Dispute":
             return (
                 f"1.\tI am well conversant with the facts and circumstances of the suit and my title/possession over the suit property.\n\n"
                 f"2.\t{sd}\n\tThe copy of title documents is exhibited as EX. PW-1/1.\n\n"
-                f"3.\tThat the Defendant illegally interfered with/dispossessed me from the suit property valued at {amt} on or about {inc}. Supporting revenue records are exhibited as EX. PW-1/2.\n\n"
+                f"3.\tThat the Defendant illegally interfered with/dispossessed me from the suit property valued at {contract_amt} on or about {incident_date}. Supporting revenue records are exhibited as EX. PW-1/2.\n\n"
                 f"4.\tThat I am entitled to possession and injunction under {stat}. I hereby close my evidence. My statements are true and correct."
             )
-        # Civil default
+        # Civil default - separate contract value and damages
         return (
             f"1.\tI am well conversant with the facts and circumstances of the suit and am duly authorised to represent the Plaintiff before this Hon’ble Court.\n\n"
             f"2.\t{sd}\n\tThe copy of agreement / ledger account is exhibited as EX. CW-1/1.\n\n"
-            f"3.\tThat the Defendant breached the agreement on or about {inc}, causing damages of {amt} to the Plaintiff. Supporting correspondence is exhibited as EX. CW-1/2.\n\n"
+            f"3.\tThat the Defendant breached the agreement on or about {incident_date}, causing damages of {self._get_fs_field(fs, 'damages_claimed', 'damages claimed')} to the Plaintiff. Supporting correspondence is exhibited as EX. CW-1/2.\n\n"
             f"4.\tThat the Plaintiff is entitled to recover the said damages under {stat}. I hereby close my evidence. My statements are true and correct."
         )
+
+    def _get_fs_field(self, fs: Optional[Dict], field_name: str, default: str = "") -> str:
+        """Get a field value from FactSheet dict, returning placeholder if MISSING."""
+        if fs and isinstance(fs, dict):
+            field = fs.get(field_name, {})
+            if field and field.get("value"):
+                return field["value"]
+            # Return placeholder for MISSING
+            return missing_marker(field_name.replace("_", " "))
+        return default or missing_marker(field_name.replace("_", " "))
+
+    def _get_fs_field_dict(self, fs: Optional[Dict], field_name: str) -> Dict:
+        """Get the full field dict from FactSheet."""
+        if fs and isinstance(fs, dict):
+            return fs.get(field_name, {})
+        return {}
 
     def _prepare_context(self, ctx: Dict) -> Dict:
         """Classification gate: validate the case type BEFORE generating (works on a copy)."""
@@ -658,33 +828,132 @@ class LegalDraftGenerator:
         return self._generate_section_with_source(section, ctx)[0]
 
     def _template_section(self, section: str, ctx: Dict) -> str:
-        """Hardcoded, case-type-specific template (no model involved)."""
+        """Hardcoded, case-type-specific template (no model involved). Uses FactSheet with MISSING placeholders."""
         case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
         cfg = CASE_TYPE_CONFIG.get(case_type, CASE_TYPE_CONFIG[DEFAULT_CASE_TYPE])
-        p = ctx.get("petitioner", f"The {cfg['p_label']}")
-        r = ctx.get("respondent", f"The {cfg['r_label']}")
-        court = ctx.get("court", "HON'BLE COURT")
-        loc = ctx.get("location", "Delhi")
-        desc = ctx.get("description", "")
-        relief = ctx.get(
-            "relief_sought", "appropriate relief as deemed fit by this Hon'ble Court"
-        )
-        inc = ctx.get("incident_date", "the relevant date")
-        sl = ctx.get("statutes", [])
-        stat = ", ".join(sl) if sl else "applicable provisions of law"
-        ml = ctx.get("money", [])
-        amt = ml[0] if ml else "the due amount"
-        yr = datetime.datetime.now().year
-        rag = ctx.get("rag_context", "")
-        rn = (
-            "\n\n[Note: Draft prepared with reference to similar legal precedents via RAG.]"
-            if rag
-            else ""
-        )
-        sig = (
-            f"\t\t\t\t\t\t\t\t\t{cfg['p_label'].upper()}\n{loc}\t\t\t\t\t\t\tThrough\n"
-            f"Dated: ___________\t\t\t\t\t\t\t\tCounsel"
-        )
+
+        # Prefer FactSheet when available
+        fs = ctx.get("fact_sheet") if isinstance(ctx.get("fact_sheet"), dict) else None
+        ctx.get("raw_prompt", "")
+
+        if fs:
+            parties = fs.get("parties", [])
+            p = parties[0].get("name") if parties else self._get_fs_field(fs, "contract_value", "Petitioner")
+            r = parties[1].get("name") if len(parties) > 1 else self._get_fs_field(fs, "contract_value", "Respondent")
+            court = ctx.get("court", "HON'BLE COURT")
+            loc = ctx.get("location", "Delhi")
+            desc = ctx.get("description", "")
+
+            # Relief sought as list
+            relief_items = fs.get("relief_sought", [])
+            relief_text = "; ".join([r.get("value") for r in relief_items if r.get("value")]) if relief_items else ""
+
+            # Statutes
+            statutes = fs.get("statutes_cited_by_user", [])
+            stat = ", ".join(statutes) if statutes else "applicable provisions of law"
+
+            # Contract/incident dates
+            contract_date = fs.get("contract_date", {}).get("value")
+            incident_date = fs.get("incident_date", {}).get("value") or fs.get("contract_date", {}).get("value")
+
+            # Money
+            contract_value = fs.get("contract_value", {}).get("value")
+            damages_claimed = fs.get("damages_claimed", {}).get("value")
+
+            # Claim type
+            fs.get("claim_type", {}).get("value", "")
+            fs.get("claim_type_raw", {}).get("value", "")
+
+            # Place
+            fs.get("place", {}).get("value")
+
+            # Court
+            court = ctx.get("court", "HON'BLE COURT")
+
+            # Description
+            desc = ctx.get("description", "")
+
+            # Relief sought
+            relief = relief_text
+
+            # Contract date
+            inc = contract_date or incident_date or self._get_fs_field(fs, "contract_date", "contract date")
+
+            # Statutes
+            sl = statutes
+            stat = ", ".join(sl) if sl else "applicable provisions of law"
+
+            # Money
+            contract_val = contract_value
+
+            # Amt for backwards compat (use contract_value for complaint, damages for prayer)
+            amt = contract_val
+
+            # Year
+            yr = datetime.datetime.now().year
+
+            # RAG
+            rag = ctx.get("rag_context", "")
+
+            # Review notes
+            review_note_parties = "\n[REVIEW NOTE: Exact legal names and entity types to be confirmed.]"
+            review_note_roles = "\n[REVIEW NOTE: Party roles assumed from the prompt; confirm which party you represent.]"
+            review_note_statutes = "\n[REVIEW NOTE: Section 73 applies to damages only; specific performance is under SRA ss.10/14/16.]"
+
+            sig = (
+                f"\t\t\t\t\t\t\t\t\t{cfg['p_label'].upper()}\n{loc}\t\t\t\t\t\t\tThrough\n"
+                f"Dated: ___________\t\t\t\t\t\t\t\tCounsel"
+            )
+
+            # Party labels from case type config
+            cfg['p_label']
+            cfg['r_label']
+
+            # Use exact party names from FactSheet (no suffixes)
+            p = parties[0].get("name") if parties else self._get_fs_field(fs, "contract_value", "Petitioner")
+            r = parties[1].get("name") if len(parties) > 1 else self._get_fs_field(fs, "contract_value", "Respondent")
+
+            # Use exact party names (no suffixes added)
+        else:
+            # Legacy fallback
+            p = ctx.get("petitioner", "Petitioner")
+            r = ctx.get("respondent", "Respondent")
+            court = ctx.get("court", "HON'BLE COURT")
+            loc = ctx.get("location", "Delhi")
+            desc = ctx.get("description", "")
+            relief = ctx.get("relief_sought", "appropriate relief as deemed fit")
+            inc = ctx.get("incident_date", "the relevant date")
+            sl = ctx.get("statutes", [])
+            stat = ", ".join(sl) if sl else "applicable provisions of law"
+            ml = ctx.get("money", [])
+            amt = ml[0] if ml else "the due amount"
+            yr = datetime.datetime.now().year
+            rag = ctx.get("rag_context", "")
+            rn = (
+                "\n\n[Note: Draft prepared with reference to similar legal precedents via RAG.]"
+                if rag
+                else ""
+            )
+            sig = (
+                f"\t\t\t\t\t\t\t\t\t{cfg['p_label'].upper()}\n{loc}\t\t\t\t\t\t\tThrough\n"
+                f"Dated: ___________\t\t\t\t\t\t\t\tCounsel"
+            )
+            review_note_parties = ""
+            review_note_roles = ""
+            review_note_statutes = ""
+            cfg['p_label']
+            cfg['r_label']
+
+        # MISSING placeholders
+        self._get_fs_field(fs, "contract_date", "contract date") if fs else "[TO BE CONFIRMED: contract date]"
+        self._get_fs_field(fs, "delivery_date", "delivery date") if fs else "[TO BE CONFIRMED: delivery date]"
+        self._get_fs_field(fs, "incident_date", "incident date") if fs else "[TO BE CONFIRMED: incident date]"
+        self._get_fs_field(fs, "contract_value", "contract value") if fs else "[TO BE CONFIRMED: contract value]"
+        self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "[TO BE CONFIRMED: damages claimed]"
+        self._get_fs_field(fs, "place", "place") if fs else "[TO BE CONFIRMED: place]"
+        self._get_fs_field(fs, "claim_type", "claim type") if fs else "[TO BE CONFIRMED: claim type]"
+        self._get_fs_field(fs, "relief_sought", "relief sought") if fs else "[TO BE CONFIRMED: relief sought]"
+        self._get_fs_field(fs, "has_arbitration_clause", "arbitration clause") if fs else "[TO BE CONFIRMED: arbitration clause]"
 
         if section == "title_block":
             ps_line = f"\t\t\t\t\t\t\t\t\t\tP.S.- {loc}\n\n" if cfg["show_ps"] else ""
@@ -699,21 +968,21 @@ class LegalDraftGenerator:
             )
 
         if section == "complaint_body":
-            return f"MOST RESPECTFULLY SHOWETH:\n\n{self._narrative_paragraphs(case_type, p, r, desc, inc, amt, stat, rn)}"
+            return f"MOST RESPECTFULLY SHOWETH:\n\n{self._narrative_paragraphs(case_type, p, r, desc, inc, amt, stat, rn, fs, review_note_parties, review_note_roles)}{review_note_parties}{review_note_roles}"
 
         if section == "prayer":
-            return f"PRAYER\n\n{self._prayer_text(case_type, p, r, relief, stat)}\n\n\n{sig}"
+            return f"PRAYER\n\n{self._prayer_text(case_type, p, r, relief, stat, fs, damages_claimed)}{review_note_statutes}\n\n\n{sig}"
 
         if section == "list_of_witnesses":
-            witnesses = self._witnesses_for(case_type, p)
+            witnesses = self._witnesses_for(case_type, p, fs)
             body = "\n\n".join(f"{i}.\t{w}" for i, w in enumerate(witnesses, 1))
             return (
                 f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
-                f"LIST OF WITNESSES\n\n{body}\n\n\n{sig}"
+                f"LIST OF WITNESSES\n\n{body}{review_note_parties}\n\n\n{sig}"
             )
 
         if section == "list_of_documents":
-            documents = self._documents_for(case_type, amt, inc)
+            documents = self._documents_for(case_type, amt, inc, fs)
             annexures = [chr(ord("A") + i) for i in range(len(documents))]
             body = "\n\n".join(
                 f"{i}.\t{d}\t\t\t\t[Annexure – {a}]"
@@ -721,7 +990,7 @@ class LegalDraftGenerator:
             )
             return (
                 f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
-                f"LIST OF DOCUMENTS\n\nSr. No.\tDescription of Document\t\t\t\t\t\tAnnexure\n\n{body}\n\n\n{sig}"
+                f"LIST OF DOCUMENTS\n\nSr. No.\tDescription of Document\t\t\t\t\t\tAnnexure\n\n{body}{review_note_parties}\n\n\n{sig}"
             )
 
         if section == "affidavit":
@@ -729,7 +998,7 @@ class LegalDraftGenerator:
                 f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
                 f"AFFIDAVIT\n\n"
                 f"I, the deponent, {cfg['p_label']} herein / Authorised Representative of {p}, having its office at {loc}, do hereby solemnly affirm and declare as under:\n\n"
-                f"{self._affidavit_body(case_type, p, inc, amt, stat)}\n\n\n"
+                f"{self._affidavit_body(case_type, p, inc, amt, stat, fs)}{review_note_parties}\n\n\n"
                 f"Deponent\n\n\n"
                 f"VERIFICATION:\n\n"
                 f"Verified at {loc} on this _____ day of _____________ {yr}, that the contents of the above affidavit are true and correct to my knowledge and no part of it is false and nothing material has been concealed therefrom.\n\n\n"
@@ -742,7 +1011,7 @@ class LegalDraftGenerator:
                 f"{self._court_header(court, loc, cfg, yr)}{self._parties_block(cfg, p, r)}"
                 f"EVIDENCE BY WAY OF AFFIDAVIT\n\n"
                 f"I, the deponent, {cfg['p_label']} herein / Authorised Representative of {p}, having its office at {loc}, do hereby solemnly affirm and declare as under:\n\n"
-                f"{self._evidence_body(case_type, sd, inc, amt, stat)}\n\n\n"
+                f"{self._evidence_body(case_type, sd, inc, amt, stat, fs)}{review_note_parties}\n\n\n"
                 f"Deponent\n\n\n"
                 f"VERIFICATION:\n\n"
                 f"Verified at {loc} on this _____ day of _____________ {yr} that the contents of the above affidavit are true to my knowledge and no part of it is false and nothing material has been concealed therefrom.\n\n\n"
