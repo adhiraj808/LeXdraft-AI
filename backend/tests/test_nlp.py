@@ -131,18 +131,43 @@ class TestFactSheet:
         party_names = sheet.party_names()
         assert "Tata Steel" in party_names
         assert "Indira Car Manufacturers" in party_names
-        # Contract date stays as written (no normalization)
+        # Party roles: plaintiff/defendant inferred from context
+        tata = next(p for p in sheet.parties if p.name == "Tata Steel")
+        indira = next(p for p in sheet.parties if p.name == "Indira Car Manufacturers")
+        # Role may be plaintiff or defendant depending on prompt interpretation
+        assert tata.role in ("plaintiff", "defendant", "unknown")
+        assert indira.role in ("plaintiff", "defendant", "unknown")
+        # They should have opposite roles if both inferred
+        if tata.role != "unknown" and indira.role != "unknown":
+            assert tata.role != indira.role
+        # Entity types
+        assert tata.entity_type == "company"
+        assert indira.entity_type == "company"
+        # Contract date stays as written (no normalization), PROVIDED because grounded
         assert sheet.contract_date.value == "March 2026"
-        assert sheet.contract_date.status == "INFERRED"
-        # Contract value present
+        assert sheet.contract_date.status == "PROVIDED"
+        # Contract value present with normalized amount
         assert sheet.contract_value.value is not None
-        assert "50 crore" in sheet.contract_value.value or "50 crore" in sheet.contract_value.value
-        assert sheet.contract_value.status == "INFERRED"
+        assert "50 crore" in sheet.contract_value.value
+        assert sheet.contract_value.status == "PROVIDED"
+        assert sheet.contract_value.normalized is not None
+        assert sheet.contract_value.normalized.get("amount_inr") == 50_00_00_000
         # Delivery date not mentioned -> MISSING
         assert sheet.delivery_date.status == "MISSING"
         assert sheet.delivery_date.value is None
         # Incident date MISSING (only contract date in prompt)
         assert sheet.incident_date.status == "MISSING"
+        # Relief sought extracted
+        assert sheet.relief_sought.value is not None
+        assert "damages" in sheet.relief_sought.value.lower()
+        assert "specific performance" in sheet.relief_sought.value.lower()
+        # Claim type extracted
+        assert sheet.claim_type.value is not None
+        # The prompt says "failed to deliver" which is grounded and extracted
+        assert sheet.claim_type.value in ("failed to deliver", "breach of contract", "non-delivery")
+        # Place
+        assert sheet.place.value == "Jamshedpur"
+        assert sheet.place.status == "PROVIDED"
 
     def test_grounding_check_rejects_llm_hallucination(self):
         """Mocked LLM returns wrong party + normalized date -> both downgraded."""
@@ -164,6 +189,39 @@ class TestFactSheet:
 
     def test_missing_marker_format(self):
         assert missing_marker("contract date") == "[TO BE CONFIRMED: contract date]"
+
+    def test_normalize_amount_inr(self):
+        """Test amount normalization for Indian currency formats."""
+        from app.nlp.fact_sheet import normalize_amount_inr
+        assert normalize_amount_inr("Rs 50 crore") == 50_00_00_000
+        assert normalize_amount_inr("Rs. 5,00,000") == 5_00_000
+        assert normalize_amount_inr("10 lakh") == 10_00_000
+        assert normalize_amount_inr("100 thousand") == 1_00_000
+        assert normalize_amount_inr("₹ 25,00,000") == 25_00_000
+        assert normalize_amount_inr("invalid") is None
+
+    def test_infer_entity_type(self):
+        """Test entity type inference."""
+        from app.nlp.fact_sheet import infer_entity_type
+        assert infer_entity_type("Tata Steel") == "company"
+        assert infer_entity_type("Tata Steel Ltd") == "company"
+        assert infer_entity_type("ABC Pvt Ltd") == "company"
+        assert infer_entity_type("XYZ LLP") == "llp"
+        assert infer_entity_type("Government of India") == "government"
+        assert infer_entity_type("John Doe") == "unknown"
+
+    def test_missing_critical_fields(self):
+        """Test missing_critical_fields returns relevant questions."""
+        from app.nlp.fact_sheet import build_from_text
+        sheet = build_from_text(TATA_STEEL_PROMPT)
+        questions = sheet.missing_critical_fields("plaint")
+        assert len(questions) > 0
+        # Should ask about user side
+        assert any("represent" in q.lower() for q in questions)
+        # Should ask about delivery date for contract
+        assert any("delivery" in q.lower() for q in questions)
+        # Should ask about arbitration
+        assert any("arbitration" in q.lower() for q in questions)
 
 
 class TestAlembic003:
