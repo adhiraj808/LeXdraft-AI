@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@v3.88.2
+        uses: trufflesecurity/trufflehog@v3.99.8
         with:
           path: ./
           # base/head refs exist only on pull_request events.
