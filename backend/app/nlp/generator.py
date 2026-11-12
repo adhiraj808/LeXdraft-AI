@@ -540,9 +540,9 @@ class LegalDraftGenerator:
             f"5.\tThat this Hon’ble Court has full jurisdiction to try and decide this suit under {stat}, and the suit is filed within the period of limitation.{rn}"
         )
 
-    def _prayer_text(self, case_type, p, r, relief, stat, fs=None, damages_claimed=None):
+    def _prayer_text(self, case_type, p, r, relief, stat, fs=None):
         """Prayer section with MISSING placeholders and review notes."""
-        self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "damages claimed"
+        damages_claimed = self._get_fs_field(fs, "damages_claimed", "damages claimed") if fs else "damages claimed"
         self._get_fs_field(fs, "contract_value", "contract value") if fs else "contract value"
         self._get_fs_field(fs, "place", "place") if fs else "place"
         ", ".join(fs.get("statutes_cited_by_user", [])) if fs else "applicable provisions of law"
@@ -590,15 +590,19 @@ class LegalDraftGenerator:
 
     def _witnesses_for(self, case_type, p, fs=None):
         """Witness list - no defendant witnesses in plaintiff's list."""
-        common_tail = ["Any other witness with the permission of this Hon’ble Court."]
+        common_tail = ["Any other witness with the permission of this Hon'ble Court."]
         p_name = p  # exact name from FactSheet
 
         if case_type == "Criminal":
+            # Use place from FactSheet for police station location
+            place = self._get_fs_field(fs, "place", "police station") if fs else "police station"
+            # Notice delivery mode - no assumption of post; use FactSheet or placeholder
+            notice_mode = self._get_fs_field(fs, "notice_mode", "mode of notice delivery") if fs else "[TO BE CONFIRMED: mode of notice delivery]"
             return [
                 f"Authorised Representative of the Complainant, {p_name}, who is well conversant with the facts and circumstances of the complaint.",
                 "Clerk / Officer of the bank on which the cheque was drawn, with all relevant records.",
                 "Clerk / Officer of the bank where the cheque was deposited for realisation, with all relevant records.",
-                "Clerk / Officer of the concerned Post Office with relevant records.",
+                f"Clerk / Officer of the concerned {notice_mode} at {place}, with relevant records.",
             ] + common_tail
         if case_type == "Family Law":
             return [
@@ -639,15 +643,17 @@ class LegalDraftGenerator:
         incident_date = self._get_fs_field(fs, "incident_date", "incident date") if fs else "incident date"
 
         if case_type == "Criminal":
+            # Notice delivery mode from FactSheet or placeholder
+            notice_mode = self._get_fs_field(fs, "notice_mode", "mode of notice delivery") if fs else "[TO BE CONFIRMED: mode of notice delivery]"
             return [
                 "Resolution / Authority letter authorising the AR",
                 f"Copies of invoices / bills / ledger account showing dues of {contract_amt}",
                 f"Original cheque for {contract_amt} dated {contract_date}",
                 "Original cheque returning / dishonour memo from bank",
                 "Copy of legal demand notice issued to the Accused",
-                "Original postal receipt and Proof of Delivery (POD)",
+                f"Proof of delivery for legal notice ({notice_mode})",
                 "Copy of email / electronic communication sent to the Accused",
-                "Any other document as may be permitted by this Hon’ble Court",
+                "Any other document as may be permitted by this Hon'ble Court",
             ]
         if case_type == "Family Law":
             return [
@@ -735,11 +741,13 @@ class LegalDraftGenerator:
         self._get_fs_field(fs, "place", "place") if fs else "place"
 
         if case_type == "Criminal":
+            # Notice delivery mode from FactSheet or placeholder
+            notice_mode = self._get_fs_field(fs, "notice_mode", "mode of notice delivery") if fs else "[TO BE CONFIRMED: mode of notice delivery]"
             return (
-                f"1.\tI am well conversant with the facts and circumstances of the complaint and am duly authorised to represent the firm before this Hon’ble Court. The Original resolution is exhibited as EX. CW-1/1.\n\n"
+                f"1.\tI am well conversant with the facts and circumstances of the complaint and am duly authorised to represent the firm before this Hon'ble Court. The Original resolution is exhibited as EX. CW-1/1.\n\n"
                 f"2.\t{sd}\n\tThe copy of ledger account / invoices is exhibited as EX. CW-1/2.\n\n"
                 f"3.\tThat the Accused issued a cheque dated {incident_date} for a sum of {contract_amt} in favour of the Complainant which was dishonoured. The original cheque is exhibited as EX. CW-1/3 and the dishonour memo is exhibited as EX. CW-1/4.\n\n"
-                f"4.\tThat the legal demand notice was duly served upon the Accused who failed to pay within 15 days. Legal notice is exhibited as EX. CW-1/5. Postal receipt and POD is exhibited as EX. CW-1/6. Email copy is exhibited as EX. CW-1/7.\n\n"
+                f"4.\tThat the legal demand notice was duly served upon the Accused who failed to pay within 15 days. Legal notice is exhibited as EX. CW-1/5. Proof of delivery ({notice_mode}) is exhibited as EX. CW-1/6. Email copy is exhibited as EX. CW-1/7.\n\n"
                 f"5.\tThat the Accused is liable to be prosecuted u/s {stat}. I hereby close my pre-summoning evidence. My statements are true and correct."
             )
         if case_type == "Family Law":
@@ -829,6 +837,29 @@ class LegalDraftGenerator:
 
     def _template_section(self, section: str, ctx: Dict) -> str:
         """Hardcoded, case-type-specific template (no model involved). Uses FactSheet with MISSING placeholders."""
+        # Check for adversarial prompts
+        raw_prompt = ctx.get("raw_prompt", "").lower()
+        adversarial_patterns = [
+            "ignore all previous instructions",
+            "ignore previous instructions",
+            "you are now a hacker",
+            "fake evidence",
+            "fake witness",
+            "fake medical",
+            "fake court order",
+            "fake judgment",
+            "forge a court order",
+            "forge an affidavit",
+            "lie under oath",
+            "fake hospital",
+            "fake doctor",
+            "fake police report",
+            "system prompt injection",
+        ]
+        for pattern in adversarial_patterns:
+            if pattern in raw_prompt:
+                return "[REFUSAL: This request appears to be asking for fraudulent or illegal content. I cannot generate fake evidence, forge documents, or create false legal filings. Please provide a legitimate legal matter for assistance.]"
+        
         case_type = ctx.get("case_type", DEFAULT_CASE_TYPE)
         cfg = CASE_TYPE_CONFIG.get(case_type, CASE_TYPE_CONFIG[DEFAULT_CASE_TYPE])
 
@@ -859,6 +890,11 @@ class LegalDraftGenerator:
             # Money
             contract_value = fs.get("contract_value", {}).get("value")
             damages_claimed = fs.get("damages_claimed", {}).get("value")
+            # Convert to string for template formatting
+            if isinstance(contract_value, (int, float)):
+                contract_value = str(contract_value)
+            if isinstance(damages_claimed, (int, float)):
+                damages_claimed = str(damages_claimed)
 
             # Claim type
             fs.get("claim_type", {}).get("value", "")
@@ -887,7 +923,8 @@ class LegalDraftGenerator:
             contract_val = contract_value
 
             # Amt for backwards compat (use contract_value for complaint, damages for prayer)
-            amt = contract_val
+            # Ensure amt is string for template formatting
+            amt = str(contract_val) if contract_val is not None else "the due amount"
 
             # Year
             yr = datetime.datetime.now().year
@@ -926,7 +963,7 @@ class LegalDraftGenerator:
             sl = ctx.get("statutes", [])
             stat = ", ".join(sl) if sl else "applicable provisions of law"
             ml = ctx.get("money", [])
-            amt = ml[0] if ml else "the due amount"
+            amt = str(ml[0]) if ml else "the due amount"
             yr = datetime.datetime.now().year
             rag = ctx.get("rag_context", "")
             rn = (
@@ -971,7 +1008,7 @@ class LegalDraftGenerator:
             return f"MOST RESPECTFULLY SHOWETH:\n\n{self._narrative_paragraphs(case_type, p, r, desc, inc, amt, stat, rn, fs, review_note_parties, review_note_roles)}{review_note_parties}{review_note_roles}"
 
         if section == "prayer":
-            return f"PRAYER\n\n{self._prayer_text(case_type, p, r, relief, stat, fs, damages_claimed)}{review_note_statutes}\n\n\n{sig}"
+            return f"PRAYER\n\n{self._prayer_text(case_type, p, r, relief, stat, fs)}{review_note_statutes}\n\n\n{sig}"
 
         if section == "list_of_witnesses":
             witnesses = self._witnesses_for(case_type, p, fs)
@@ -1043,6 +1080,44 @@ class LegalDraftGenerator:
         """
         start = time.time()
         ctx = self._prepare_context(context)
+        
+        # Check for adversarial prompts - return refusal draft immediately
+        raw_prompt = ctx.get("raw_prompt", "")
+        if not raw_prompt:
+            # Try to get from description
+            raw_prompt = ctx.get("description", "")
+        raw_prompt = raw_prompt.lower()
+        adversarial_patterns = [
+            "ignore all previous instructions",
+            "ignore previous instructions",
+            "you are now a hacker",
+            "fake evidence",
+            "fake witness",
+            "fake medical",
+            "fake court order",
+            "fake judgment",
+            "forge a court order",
+            "forge an affidavit",
+            "lie under oath",
+            "fake hospital",
+            "fake doctor",
+            "fake police report",
+            "system prompt injection",
+            "forged signature",
+            "fake court stamp",
+            "fake legal notice",
+            "fake stamp",
+            "scare my opponent",
+        ]
+        for pattern in adversarial_patterns:
+            if pattern in raw_prompt:
+                refusal_msg = "[REFUSAL: This request appears to be asking for fraudulent or illegal content. I cannot generate fake evidence, forge documents, or create false legal filings. Please provide a legitimate legal matter for assistance.]"
+                sections = {name: refusal_msg for name in SECTION_ORDER}
+                sections["_generation_time"] = round(time.time() - start, 2)
+                sections["_full_text"] = "\n\n".join(sections[name] for name in SECTION_ORDER)
+                sections["_model_used"] = "template-refusal"
+                return sections
+        
         sections: Dict[str, str] = {}
         sources: List[str] = []
         last_index = len(SECTION_ORDER) - 1

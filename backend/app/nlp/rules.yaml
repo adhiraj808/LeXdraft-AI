@@ -1,0 +1,349 @@
+# Legal Draft System - Validation Rules
+# Rules are keyed by claim_type and define validation constraints
+# This file replaces hardcoded rules in validator.py
+
+rules:
+  # ============ CONTRACT CLAIMS ============
+  breach_of_contract:
+    statutes_whitelist:
+      - "Section 73 of the Indian Contract Act 1872"
+      - "Section 74 of the Indian Contract Act 1872"
+      - "Section 55 of the Indian Contract Act 1872"
+      - "Specific Relief Act 1963"
+      - "Sale of Goods Act 1930"
+    invalid_combinations:
+      - description: "Section 73 applies to damages only, not specific performance"
+        pattern: "specific performance.*Section 73"
+        message: "Draft cites 'specific performance under Section 73' — Section 73 applies to damages only. Specific performance is under Specific Relief Act ss.10/14/16."
+      - description: "Contract value should not equal damages claimed"
+        check: "contract_value_equals_damages"
+        message: "Contract value and damages claimed are identical — verify these are distinct amounts."
+    required_fields:
+      - "contract_date"
+      - "contract_value"
+      - "parties"
+    relief_types:
+      - "damages"
+      - "specific_performance"
+      - "injunction"
+      - "declaration"
+
+  recovery_of_money:
+    statutes_whitelist:
+      - "Section 73 of the Indian Contract Act 1872"
+      - "Section 74 of the Indian Contract Act 1872"
+      - "Order 37 CPC (Summary Procedure)"
+      - "Negotiable Instruments Act 1881"
+      - "SARFAESI Act 2002"
+    invalid_combinations:
+      - description: "Section 73 applies to damages only"
+        pattern: "specific performance.*Section 73"
+        message: "Section 73 applies to damages only; specific performance is under SRA ss.10/14/16."
+    required_fields:
+      - "contract_value"
+      - "parties"
+    relief_types:
+      - "recovery"
+      - "interest"
+      - "costs"
+
+  non_delivery_of_goods:
+    statutes_whitelist:
+      - "Section 73 of the Indian Contract Act 1872"
+      - "Section 74 of the Indian Contract Act 1872"
+      - "Section 55 of the Indian Contract Act 1872"
+      - "Specific Relief Act 1963"
+      - "Sale of Goods Act 1930"
+    invalid_combinations:
+      - description: "Section 73 applies to damages only, not specific performance"
+        pattern: "specific performance.*Section 73"
+        message: "Draft cites 'specific performance under Section 73' — Section 73 applies to damages only. Specific performance is under Specific Relief Act ss.10/14/16."
+      - description: "Contract value should not equal damages claimed"
+        check: "contract_value_equals_damages"
+        message: "Contract value and damages claimed are identical — verify these are distinct amounts."
+    required_fields:
+      - "contract_date"
+      - "contract_value"
+      - "parties"
+    relief_types:
+      - "damages"
+      - "specific_performance"
+      - "injunction"
+      - "declaration"
+
+  specific_performance:
+    statutes_whitelist:
+      - "Specific Relief Act 1963"
+      - "Section 10 Specific Relief Act"
+      - "Section 14 Specific Relief Act"
+      - "Section 16 Specific Relief Act"
+    invalid_combinations:
+      - description: "Section 73 cannot be cited for specific performance"
+        pattern: "Section 73.*specific performance|specific performance.*Section 73"
+        message: "Section 73 applies to damages only; specific performance is under Specific Relief Act ss.10/14/16."
+    required_fields:
+      - "contract_date"
+      - "parties"
+    relief_types:
+      - "specific_performance"
+      - "declaration"
+      - "injunction"
+
+  # ============ CHEQUE BOUNCE ============
+  cheque_bounce:
+    statutes_whitelist:
+      - "Section 138 Negotiable Instruments Act 1881"
+      - "Section 139 Negotiable Instruments Act 1881"
+      - "Section 140 Negotiable Instruments Act 1881"
+      - "Section 141 Negotiable Instruments Act 1881"
+      - "Section 142 Negotiable Instruments Act 1881"
+      - "Section 143 Negotiable Instruments Act 1881"
+      - "Section 144 Negotiable Instruments Act 1881"
+      - "Section 145 Negotiable Instruments Act 1881"
+      - "Section 146 Negotiable Instruments Act 1881"
+      - "Section 147 Negotiable Instruments Act 1881"
+      - "Section 148 Negotiable Instruments Act 1881"
+    invalid_combinations: []
+    required_fields:
+      - "cheque_amount"
+      - "cheque_date"
+      - "dishonour_date"
+      - "notice_date"
+      - "parties"
+    relief_types:
+      - "prosecution"
+      - "compensation"
+      - "interim_compensation"
+
+  # ============ FAMILY LAW ============
+  divorce:
+    statutes_whitelist:
+      - "Section 13 Hindu Marriage Act 1955"
+      - "Section 13B Hindu Marriage Act 1955"
+      - "Section 27 Hindu Marriage Act 1955"
+      - "Section 28 Hindu Marriage Act 1955"
+      - "Dissolution of Muslim Marriages Act 1939"
+      - "Indian Divorce Act 1869"
+      - "Special Marriage Act 1954"
+    invalid_combinations: []
+    required_fields:
+      - "marriage_date"
+      - "parties"
+      - "grounds"
+    relief_types:
+      - "divorce"
+      - "custody"
+      - "maintenance"
+      - "property_division"
+      - "visitation"
+
+  maintenance:
+    statutes_whitelist:
+      - "Section 125 CrPC"
+      - "Section 126 CrPC"
+      - "Section 127 CrPC"
+      - "Section 128 CrPC"
+      - "Section 24 Hindu Marriage Act 1955"
+      - "Section 25 Hindu Marriage Act 1955"
+      - "Protection of Women from Domestic Violence Act 2005"
+    invalid_combinations: []
+    required_fields:
+      - "parties"
+      - "income_respondent"
+    relief_types:
+      - "monthly_maintenance"
+      - "interim_maintenance"
+      - "lump_sum"
+
+  custody:
+    statutes_whitelist:
+      - "Section 26 Hindu Marriage Act 1955"
+      - "Guardians and Wards Act 1890"
+      - "Section 17 Guardians and Wards Act"
+      - "Protection of Women from Domestic Violence Act 2005"
+    invalid_combinations: []
+    required_fields:
+      - "parties"
+      - "child_details"
+    relief_types:
+      - "sole_custody"
+      - "joint_custody"
+      - "visitation"
+      - "supervised_visitation"
+
+  # ============ CRIMINAL ============
+  criminal_complaint:
+    statutes_whitelist:
+      - "Section 154 CrPC"
+      - "Section 156 CrPC"
+      - "Section 190 CrPC"
+      - "Section 200 CrPC"
+      - "Indian Penal Code 1860"
+      - "Section 323 IPC"
+      - "Section 325 IPC"
+      - "Section 379 IPC"
+      - "Section 420 IPC"
+      - "Section 406 IPC"
+      - "Section 498A IPC"
+      - "Section 354D IPC"
+      - "Section 507 IPC"
+      - "Information Technology Act 2000"
+      - "Section 66 IT Act"
+      - "Section 67 IT Act"
+    invalid_combinations: []
+    required_fields:
+      - "incident_date"
+      - "parties"
+      - "fir_details"
+    relief_types:
+      - "prosecution"
+      - "compensation"
+      - "investigation"
+
+  bail:
+    statutes_whitelist:
+      - "Section 437 CrPC"
+      - "Section 438 CrPC"
+      - "Section 439 CrPC"
+      - "Article 21 Constitution of India"
+    invalid_combinations: []
+    required_fields:
+      - "fir_details"
+      - "accused_details"
+      - "grounds"
+    relief_types:
+      - "regular_bail"
+      - "anticipatory_bail"
+      - "interim_bail"
+
+  fir_related:
+    statutes_whitelist:
+      - "Section 154 CrPC"
+      - "Section 156 CrPC"
+      - "Section 170 CrPC"
+      - "Section 482 CrPC"
+      - "Article 226 Constitution of India"
+    invalid_combinations: []
+    required_fields:
+      - "fir_details"
+      - "parties"
+    relief_types:
+      - "quashing"
+      - "transfer"
+      - "investigation"
+      - "protection"
+
+  # ============ PROPERTY ============
+  property_dispute:
+    statutes_whitelist:
+      - "Transfer of Property Act 1882"
+      - "Registration Act 1908"
+      - "Specific Relief Act 1963"
+      - "Indian Easements Act 1882"
+      - "State Rent Control Acts"
+      - "Land Revenue Codes"
+    invalid_combinations: []
+    required_fields:
+      - "property_details"
+      - "parties"
+    relief_types:
+      - "possession"
+      - "injunction"
+      - "declaration"
+      - "partition"
+      - "eviction"
+      - "rent"
+
+  # ============ LABOUR/EMPLOYMENT ============
+  labour_employment:
+    statutes_whitelist:
+      - "Industrial Disputes Act 1947"
+      - "Section 25F Industrial Disputes Act"
+      - "Section 25N Industrial Disputes Act"
+      - "Industrial Employment (Standing Orders) Act 1946"
+      - "Maternity Benefit Act 1961"
+      - "Payment of Gratuity Act 1972"
+      - "Employees Provident Funds Act 1952"
+      - "Equal Remuneration Act 1976"
+      - "Sexual Harassment of Women at Workplace Act 2013"
+    invalid_combinations: []
+    required_fields:
+      - "employment_details"
+      - "termination_date"
+      - "parties"
+    relief_types:
+      - "reinstatement"
+      - "back_wages"
+      - "compensation"
+      - "retrenchment_compensation"
+      - "maternity_benefits"
+
+  # ============ CONSUMER ============
+  consumer_complaint:
+    statutes_whitelist:
+      - "Consumer Protection Act 2019"
+      - "Section 2 Consumer Protection Act"
+      - "Section 14 Consumer Protection Act"
+      - "Section 15 Consumer Protection Act"
+      - "Section 35 Consumer Protection Act"
+      - "Section 49 Consumer Protection Act"
+      - "Section 58 Consumer Protection Act"
+      - "Real Estate (Regulation and Development) Act 2016"
+    invalid_combinations: []
+    required_fields:
+      - "product_service_details"
+      - "deficiency_details"
+      - "parties"
+    relief_types:
+      - "refund"
+      - "replacement"
+      - "compensation"
+      - "punitive_damages"
+      - "removal_of_defects"
+
+  # ============ CONSTITUTIONAL ============
+  constitutional:
+    statutes_whitelist:
+      - "Article 32 Constitution of India"
+      - "Article 226 Constitution of India"
+      - "Article 14 Constitution of India"
+      - "Article 19 Constitution of India"
+      - "Article 21 Constitution of India"
+      - "Administrative Tribunals Act 1985"
+    invalid_combinations: []
+    required_fields:
+      - "impugned_order"
+      - "fundamental_rights"
+      - "parties"
+    relief_types:
+      - "writ_mandamus"
+      - "writ_certiorari"
+      - "writ_prohibition"
+      - "writ_quo_warranto"
+      - "writ_habeas_corpus"
+      - "declaration"
+      - "injunction"
+
+# ============ GLOBAL SETTINGS ============
+global:
+  # Entity types that must be grounded in FactSheet
+  grounded_entity_types:
+    - "name"
+    - "date"
+    - "amount"
+    - "address"
+    - "clause"
+
+  # Review notes to always include
+  review_notes:
+    parties: "Exact legal names and entity types to be confirmed."
+    roles: "Party roles assumed from the prompt; confirm which party you represent."
+    statutes: "Section 73 applies to damages only; specific performance is under SRA ss.10/14/16."
+
+  # Critical fields that must be present (5 questions)
+  critical_fields:
+    - "parties"
+    - "claim_type"
+    - "relief_sought"
+    - "user_side"
+    - "jurisdiction"

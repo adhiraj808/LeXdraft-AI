@@ -97,6 +97,7 @@ class FactSheet(BaseModel):
     contract_date: FactField = Field(default_factory=FactField)
     delivery_date: FactField = Field(default_factory=FactField)
     notice_dates: List[FactField] = Field(default_factory=list)
+    notice_mode: FactField = Field(default_factory=FactField)  # e.g., "registered post", "email", "courier"
     incident_date: FactField = Field(default_factory=FactField)
     contract_value: FactField = Field(default_factory=FactField)
     damages_claimed: FactField = Field(default_factory=FactField)
@@ -468,7 +469,13 @@ _ORG_RE = re.compile(
 # Contract date pattern
 _CONTRACT_DATE_RE = re.compile(
     r"\b(?:contract|agreement|deed|instrument)\s+(?:dated|executed|signed)\s+"
-    r"([A-Z][A-Za-z]+(?:\s+\d{1,2})?(?:\s*,?\s*\d{2,4})?)",
+    r"(\d{1,2}[\s/-]?[A-Za-z]+[\s/-]?\d{2,4}|[A-Za-z]+\s+\d{1,2}[\s,/-]?\d{2,4})",
+    re.IGNORECASE,
+)
+# Notice date pattern
+_NOTICE_DATE_RE = re.compile(
+    r"\b(?:legal\s+)?notice\s+(?:dated|sent|served|issued)(?:\s+on)?\s+"
+    r"(\d{1,2}[\s/-]?[A-Za-z]+[\s/-]?\d{2,4}|[A-Za-z]+\s+\d{1,2}[\s,/-]?\d{2,4})",
     re.IGNORECASE,
 )
 # Relief sought pattern
@@ -562,6 +569,11 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
     if contract_dates and dates:
         dates = [d for d in dates if not is_grounded(d, contract_dates[0])]
 
+    # Notice dates
+    notice_dates = [m.group(1).strip() for m in _NOTICE_DATE_RE.finditer(prompt)]
+    if notice_dates and dates:
+        dates = [d for d in dates if not any(is_grounded(d, nd) for nd in notice_dates)]
+
     # Relief sought (list of items, split by "and" or commas)
     relief_matches = [m.group(1).strip() for m in _RELIEF_RE.finditer(prompt)]
 
@@ -594,6 +606,11 @@ def build_from_text(raw_prompt: str, entities: Optional[Dict[str, Any]] = None) 
         sheet.incident_date = FactField(
             value=dates[0], status="PROVIDED", source_span=dates[0]
         )
+    if notice_dates:
+        sheet.notice_dates = [
+            FactField(value=nd, status="PROVIDED", source_span=nd)
+            for nd in notice_dates
+        ]
     if places:
         sheet.place = FactField(
             value=places[0], status="PROVIDED", source_span=places[0]

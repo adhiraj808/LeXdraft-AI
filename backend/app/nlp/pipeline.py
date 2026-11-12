@@ -14,6 +14,7 @@ except ImportError:
 
 from app.core.config import settings
 from app.nlp.classifier import CaseClassifier
+from app.nlp.extractor import extract_case_fields
 from app.nlp.generator import LegalDraftGenerator
 from app.nlp.mock_spacy import MockNLP
 from app.nlp.ner import LegalNERExtractor
@@ -218,6 +219,12 @@ class NLPPipeline:
         doc = await asyncio.to_thread(self.nlp, cleaned)
         preprocessed = await asyncio.to_thread(self.preprocessor.preprocess, text, doc)
         entities = await asyncio.to_thread(self.ner.extract, cleaned, doc)
+
+        # Stage 1b: Extract FactSheet (grounded facts for generation)
+        logger.info("Stage 1b: Extracting FactSheet...")
+        fact_sheet = await asyncio.to_thread(extract_case_fields, text, entities)
+        case_input = dict(case_input)
+        case_input["fact_sheet"] = fact_sheet
 
         # Stage 2: Classify
         logger.info("Stage 2: Classifying case type...")

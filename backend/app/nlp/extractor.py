@@ -39,6 +39,7 @@ Keys:
 - contract_date: the contract/execution date as written (or null)
 - delivery_date: the promised delivery/performance date as written (or null)
 - notice_dates: array of legal notice dates as written (or [])
+- notice_mode: the mode of notice delivery (e.g., "registered post", "email", "courier", "hand delivery") as written (or null)
 - incident_date: the key incident/breach date as written (or null)
 - contract_value: the contract amount/consideration as written (or null)
 - damages_claimed: the damages amount claimed as written (or null)
@@ -201,6 +202,11 @@ def _build_fact_sheet(raw_prompt: str, llm_data: Optional[Dict], entities: Optio
                 sheet_attr,
                 FactField(value=val, status="PROVIDED", source_span=val, normalized=normalized),
             )
+
+    # notice_mode: grounded override
+    notice_mode_val = llm_data.get("notice_mode")
+    if notice_mode_val and is_grounded(notice_mode_val, raw_prompt):
+        sheet.notice_mode = FactField(value=notice_mode_val, status="PROVIDED", source_span=notice_mode_val)
 
     # claim_type: enum (INFERRED) + raw phrase (PROVIDED)
     claim_enum = llm_data.get("claim_type_enum")

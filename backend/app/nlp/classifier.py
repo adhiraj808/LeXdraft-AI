@@ -28,106 +28,61 @@ CASE_LABELS = {
 }
 
 # Keyword-based fallback classifier (used when model is unavailable)
-KEYWORD_MAP = {
+# Using word-boundary patterns for more precise matching
+KEYWORD_PATTERNS = {
     "Criminal": [
-        "murder",
-        "assault",
-        "theft",
-        "robbery",
-        "fraud",
-        "cheating",
-        "rape",
-        "kidnapping",
-        "ipc",
-        "crpc",
-        "fir",
-        "bail",
-        "arrest",
-        "accused",
-        "offence",
-        "crime",
-        "police",
-        "jail",
-        "prison",
-        "custody",
-        "cheque",
-        "dishonour",
-        "dishonored",
-        "bounce",
-        "bounced",
-        "ni act",
-        "negotiable",
-        "138",
+        r"\bmurder\b", r"\bassault\b", r"\btheft\b", r"\brobbery\b",
+        r"\bfraud\b", r"\bcheating\b", r"\brape\b", r"\bkidnapping\b",
+        r"\bphishing\b", r"\bcyber\b", r"\bfir\b", r"\bbail\b",
+        r"\barrest\b", r"\baccused\b", r"\boffence\b", r"\bcrime\b",
+        r"\bpolice\b", r"\bjail\b", r"\bprison\b",
+        r"\bcheque\b", r"\bdishono(u?)r\b", r"\bbounce\b", r"\bbounced\b",
+        r"\bni act\b", r"\bnegotiable\b", r"\b138\b",
+        r"\bsection\s+\d+\s+ipc\b", r"\bsection\s+\d+\s+crpc\b(?!\s*125)",
+        r"\bsection\s+\d+\s+ipc\b", r"\bsection\s+\d+\s+crpc\b",
+        r"\bit act\b",
+        r"\bprosecution\b", r"\bconviction\b", r"\bsentence\b",
+        r"\bcyber cell\b", r"\bcyber police\b",
     ],
     "Civil": [
-        "contract",
-        "breach",
-        "damages",
-        "injunction",
-        "tort",
-        "negligence",
-        "specific performance",
-        "declaration",
-        "civil suit",
-        "plaintiff",
-        "defendant",
+        r"\bcontract\b", r"\bbreach\b", r"\bdamages\b", r"\binjunction\b",
+        r"\btort\b", r"\bnegligence\b", r"\bspecific performance\b",
+        r"\bdeclaration\b", r"\bcivil suit\b", r"\bplaintiff\b", r"\bdefendant\b",
+        r"\brecovery\b", r"\bspecific relief\b", r"\bsection\s+73\b",
+        r"\bsection\s+74\b", r"\bsection\s+75\b", r"\bindian contract act\b",
+        r"\bsuit for\b", r"\bdecree\b", r"\bexecution\b",
+        r"\bconsumer\b", r"\brefund\b", r"\brera\b", r"\bbuilder\b",
     ],
     "Family Law": [
-        "divorce",
-        "matrimonial",
-        "custody",
-        "maintenance",
-        "alimony",
-        "dowry",
-        "domestic violence",
-        "adoption",
-        "guardianship",
-        "marriage",
+        r"\bdivorce\b", r"\bmatrimonial\b", r"\bcustody\b", r"\bmaintenance\b",
+        r"\balimony\b", r"\bdowry\b", r"\bdomestic violence\b",
+        r"\badoption\b", r"\bguardianship\b", r"\bmarriage\b",
+        r"\bsection\s+125\b", r"\bhindu marriage act\b", r"\bspecial marriage act\b",
+        r"\bfamily court\b", r"\bmutual consent\b", r"\bdesertion\b",
+        r"\bcruelty\b", r"\btalak\b", r"\bdivorce petition\b",
+        r"\bwife\b", r"\bhusband\b", r"\bchild\b", r"\bson\b", r"\bdaughter\b",
     ],
     "Labour / Employment": [
-        "termination",
-        "dismissal",
-        "wages",
-        "salary",
-        "employment",
-        "workman",
-        "labour",
-        "industrial dispute",
-        "retrenchment",
-        "reinstatement",
-        "pf",
-        "gratuity",
-        "esic",
+        r"\btermination\b", r"\bdismissal\b", r"\bwages\b", r"\bsalary\b",
+        r"\bemployment\b", r"\bworkman\b", r"\blabour\b",
+        r"\bindustrial dispute\b", r"\bretrenchment\b", r"\breinstatement\b",
+        r"\bpf\b", r"\bgratuity\b", r"\besic\b",
+        r"\blabour court\b", r"\bindustrial tribunal\b", r"\bmaternity benefit\b",
     ],
     "Constitutional": [
-        "fundamental rights",
-        "article 14",
-        "article 21",
-        "writ",
-        "mandamus",
-        "certiorari",
-        "habeas corpus",
-        "prohibition",
-        "quo warranto",
-        "ultra vires",
-        "constitutional validity",
-        "state action",
+        r"\bfundamental rights\b", r"\barticle\s+14\b", r"\barticle\s+21\b",
+        r"\bwrit\b", r"\bmandamus\b", r"\bcertiorari\b", r"\bhabeas corpus\b",
+        r"\bprohibition\b", r"\bquo warranto\b", r"\bultra vires\b",
+        r"\bconstitutional validity\b", r"\bstate action\b",
+        r"\barticle\s+32\b", r"\barticle\s+226\b", r"\bpil\b",
     ],
     "Property Dispute": [
-        "property",
-        "land",
-        "possession",
-        "eviction",
-        "tenant",
-        "landlord",
-        "title",
-        "mutation",
-        "partition",
-        "encroachment",
-        "trespass",
-        "registry",
-        "sale deed",
-        "mortgage",
+        r"\bproperty\b(?!\s+damage)", r"\bland\b", r"\bpossession\b",
+        r"\beviction\b", r"\btenant\b", r"\blandlord\b", r"\btitle\b",
+        r"\bmutation\b", r"\bpartition\b", r"\bencroachment\b",
+        r"\btrespass\b", r"\bregistry\b", r"\bsale deed\b", r"\bmortgage\b",
+        r"\bflat\b", r"\bbuilder\b",
+        r"\brera\b", r"\breal estate\b",
     ],
 }
 
@@ -196,11 +151,15 @@ class CaseClassifier:
             self.use_model = False
 
     def _keyword_classify(self, text: str) -> Tuple[str, float]:
-        """Score each category by keyword frequency."""
+        """Score each category by keyword pattern frequency with word boundaries."""
+        import re
         text_lower = text.lower()
         scores = {}
-        for category, keywords in KEYWORD_MAP.items():
-            score = sum(text_lower.count(kw) for kw in keywords)
+        for category, patterns in KEYWORD_PATTERNS.items():
+            score = 0
+            for pattern in patterns:
+                matches = len(re.findall(pattern, text_lower, re.IGNORECASE))
+                score += matches
             scores[category] = score
 
         if all(v == 0 for v in scores.values()):
