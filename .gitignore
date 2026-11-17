@@ -67,3 +67,6 @@ temp-*.json
 analysis_output.txt
 search_results.txt
 factsheet_*.json
+
+# datasets
+datasets/
