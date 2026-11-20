@@ -1,0 +1,36 @@
+case_id,type,phrase,sentence,template_function,label
+Tata Steel failed to deliver goods worth Rs 50 cro,name,Jamshedpur Through,"IN THE COURT OF HIGH COURT
+JAMSHEDPUR COURTS
+
+C.S. NO. …………..2026
+
+IN THE MATTER OF:
+
+Tata Steel
+				……………………………………Plaintiff
+
+Versus
+
+Indira Car Manufacturers
+				……………………………………………Defendant
+
+LIST OF D",list_of_documents,
+Tata Steel failed to deliver goods worth Rs 50 cro,name,Jamshedpur Through,"PRAYER
+
+	It is, therefore, most respectfully prayed that this Hon’ble Court may be pleased to decree the suit in favour of the Plaintiff and against the Defendant, Indira Car Manufacturers, for recove",prayer,
+Tata Steel failed to deliver goods worth Rs 50 cro,name,Jamshedpur Through,"IN THE COURT OF HIGH COURT
+JAMSHEDPUR COURTS
+
+C.S. NO. …………..2026
+
+IN THE MATTER OF:
+
+Tata Steel
+				……………………………………Plaintiff
+
+Versus
+
+Indira Car Manufacturers
+				……………………………………………Defendant
+
+LIST OF W",list_of_witnesses,

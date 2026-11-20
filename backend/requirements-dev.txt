@@ -10,7 +10,7 @@ aiosqlite>=0.20.0
 
 # Development tools
 black>=24.0
-isort>=5.12
+isort>=9.0.2
 ruff>=0.4
 mypy>=1.8
 

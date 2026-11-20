@@ -26,6 +26,7 @@ from app.db.postgres import dispose_engine, init_db
 from app.db.redis_client import close_redis, init_redis
 from app.nlp.pipeline import NLPPipeline
 from app.services.case_service import recover_stale_cases
+from app.workers.case_worker import close_arq_redis, get_arq_redis
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,15 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize Redis: {e}")
         raise
 
+    # Initialize Arq Redis connection pool for job queue
+    logger.info("Initializing Arq job queue...")
+    try:
+        await get_arq_redis()
+        logger.info("Arq job queue connected.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Arq job queue: {e}")
+        raise
+
     # Load NLP models in background (don't block startup)
     logger.info("Starting NLP model loading in background...")
     nlp_pipeline = NLPPipeline()
@@ -74,6 +84,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
+    await close_arq_redis()
     await close_redis()
     await dispose_engine()
 
