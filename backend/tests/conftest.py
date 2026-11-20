@@ -77,6 +77,13 @@ async def client(test_engine, db_session, mock_user):
     mock_redis.publish = AsyncMock(return_value=None)
     redis_client._redis = mock_redis
 
+    # Mock Arq Redis connection pool (no real Redis server in test environment)
+    mock_arq_redis = MagicMock()
+    mock_arq_redis.enqueue_job = AsyncMock(return_value=MagicMock(job_id="test-job-id"))
+    mock_arq_redis.close = AsyncMock(return_value=None)
+    import app.workers.case_worker as case_worker_module
+    case_worker_module._arq_redis = mock_arq_redis
+
     # Mock NLP pipeline (generator.model_label must be a plain string: process_case
     # stores it in the Draft.model_used column)
     mock_nlp_pipeline = MagicMock()

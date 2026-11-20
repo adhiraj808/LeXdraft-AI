@@ -5,4 +5,4 @@ references in ``relationship("Case")`` / ``relationship("User")`` resolvable no 
 which module is imported first.
 """
 
-from app.models import case, user  # noqa: F401
+from app.models import case, user, token_blacklist  # noqa: F401
