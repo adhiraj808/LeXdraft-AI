@@ -101,7 +101,8 @@ class Settings(BaseSettings):
     # ── Security ─────────────────────────────────────────────────────────────
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15  # Short-lived access tokens (15 min)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7      # Long-lived refresh tokens (7 days)
 
     # Google Sign-In: the OAuth Client ID from Google Cloud Console. The backend
     # verifies the credential's `aud` claim against it. Empty = Google login disabled.

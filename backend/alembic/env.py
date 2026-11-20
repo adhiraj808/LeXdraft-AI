@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.core.config import settings
 from app.db.postgres import Base
-from app.models import case, user  # noqa: F401  (register models on Base.metadata)
+from app.models import case, user, token_blacklist  # noqa: F401  (register models on Base.metadata)
 
 config = context.config
 
