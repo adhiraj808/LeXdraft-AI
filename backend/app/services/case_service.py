@@ -30,6 +30,7 @@ from app.schemas.case import (
 logger = logging.getLogger(__name__)
 
 # How many drafts may run the NLP pipeline at the same time (memory and LLM rate limits).
+# This is now controlled by Arq worker's max_jobs setting.
 _processing_semaphore = asyncio.Semaphore(max(1, settings.MAX_CONCURRENT_DRAFTS))
 
 
@@ -408,3 +409,42 @@ class CaseService:
             )
 
         return {"section": section, "content": new_content}
+
+    # ─── Arq Job Integration ───
+
+    async def enqueue_processing(self, case_id: str, strict: bool = False) -> str:
+        """
+        Enqueue a case for background processing via Arq.
+        
+        Returns the Arq job ID.
+        """
+        # Import here to avoid circular imports
+        from app.workers.case_worker import enqueue_case_processing
+        return await enqueue_case_processing(case_id)
+
+    async def process_case_background(self, case_id: str, strict: bool = False) -> dict:
+        """
+        Process a case in the background (called by Arq worker).
+        
+        This method runs in a separate worker process with its own DB session.
+        """
+        from app.db.postgres import get_async_engine, get_async_session_maker
+        from app.nlp.pipeline import get_nlp
+        
+        engine = get_async_engine()
+        async_session = get_async_session_maker(engine)
+        nlp_pipeline = await get_nlp()
+        
+        async with async_session() as db:
+            service = CaseService(db)
+            try:
+                await service.process_case(case_id, nlp_pipeline, strict=strict)
+                return {"status": "success", "case_id": case_id}
+            except Exception as e:
+                logger.error(f"Background processing failed for case {case_id}: {e}", exc_info=True)
+                await service._mark_failed(case_id)
+                return {"status": "failed", "case_id": case_id, "error": str(e)}
+
+    async def mark_case_failed(self, case_id: str, error: str) -> None:
+        """Mark a case as failed (for use by Arq worker)."""
+        await self._mark_failed(case_id)
