@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.security import (
     burn_password_check,
     create_access_token,
+    create_refresh_token,
     get_password_hash_async,
     verify_password_async,
 )
@@ -98,8 +99,14 @@ class AuthService:
         if not user.is_active:
             raise HTTPException(status_code=403, detail="Account is inactive")
 
-        token = create_access_token({"sub": user.id, "username": user.username})
-        return {"access_token": token, "token_type": "bearer", "user": user}
+        access_token = create_access_token({"sub": user.id, "username": user.username})
+        refresh_token = create_refresh_token({"sub": user.id, "username": user.username})
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": user,
+        }
 
     @staticmethod
     def _bad_credentials() -> HTTPException:
@@ -160,8 +167,14 @@ class AuthService:
         if not user.is_active:
             raise HTTPException(status_code=403, detail="Account is inactive")
 
-        token = create_access_token({"sub": user.id, "username": user.username})
-        return {"access_token": token, "token_type": "bearer", "user": user}
+        access_token = create_access_token({"sub": user.id, "username": user.username})
+        refresh_token = create_refresh_token({"sub": user.id, "username": user.username})
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": user,
+        }
 
     async def _find_google_user(self, google_sub: str) -> Optional[User]:
         result = await self.db.execute(
