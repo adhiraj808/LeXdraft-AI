@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -344,27 +344,27 @@ async def admin_delete_case(
 @router.post("/cases/{case_id}/reprocess", status_code=202)
 async def admin_reprocess_case(
     case_id: str,
-    background_tasks: BackgroundTasks,
     request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    """Reset a stuck/failed case to pending and queue it for processing again."""
-    from app.api.routes.cases import _process_case_background, get_nlp
+    """Reset a stuck/failed case to pending and queue it for processing again via Arq."""
+    from app.services.case_service import CaseService
 
     case = (
         await db.execute(select(Case).where(Case.id == case_id))
     ).scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    nlp = get_nlp(request)
     case.status = "pending"
     await db.commit()
-    background_tasks.add_task(_process_case_background, case.id, nlp)
+    service = CaseService(db)
+    job_id = await service.enqueue_processing(case.id, strict=False)
     audit_log(admin, "reprocess_case", "case", {"case_id": case_id})
     return {
         "id": case.id,
         "status": "pending",
+        "job_id": job_id,
         "message": "Case queued for processing again.",
     }
 

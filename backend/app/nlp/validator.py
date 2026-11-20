@@ -352,7 +352,6 @@ def validate_draft(
 
     # Add names from raw_prompt (grounded entities) - these are from NER PERSON/ORG
     raw_prompt = raw_prompt or ""
-    prompt_names = set()
     # Extract capitalized names from raw_prompt that are PERSON/ORG (handled by NER in extractor)
     # We'll use the entities already extracted in the pipeline
     # For now, also add names from raw_prompt that are in FactSheet parties
@@ -389,14 +388,13 @@ def validate_draft(
         "sr description", "sr document", "annexure b", "annexure c",
         "exhibit cw", "exhibit pw", "exhibit ww", "exhibit cw1", "exhibit pw1", "exhibit ww1",
         "verification", "deponent", "solemnly affirm", "authorised representative",
-        "counsel", "advocate", "sr no", "sr no", "description of document",
+        "counsel", "advocate", "sr no", "description of document",
     }
     known_names.update(TEMPLATE_ARTIFACT_NAMES)
 
     # Find PERSON/ORG entities in draft that are NOT in known_names
     # Use line-bound matching (no \s across newline/tab)
     # At least two words for a name (PERSON/ORG pattern)
-    NAME_PATTERN = re.compile(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}$")
 
     # Check each line for PERSON/ORG-like patterns (line-bound, no cross-line \s)
     for line in full_text.splitlines():

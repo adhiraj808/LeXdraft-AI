@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,19 +46,19 @@ def get_nlp(request: Request):
 async def submit_case(
     request: Request,
     payload: CaseSubmit,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     service = CaseService(db)
     case = await service.create_case(payload, current_user)
-    nlp = get_nlp(request)
-    background_tasks.add_task(_process_case_background, case.id, nlp)
+    # Enqueue for background processing via Arq
+    job_id = await service.enqueue_processing(case.id, strict=False)
     return {
         "id": case.id,
         "title": case.title,
         "status": case.status,
         "created_at": case.created_at.isoformat(),
+        "job_id": job_id,
         "message": "Case submitted. AI is generating your draft.",
     }
 
@@ -68,38 +68,21 @@ async def submit_case(
 async def submit_case_prompt(
     request: Request,
     payload: PromptSubmit,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     service = CaseService(db)
     case = await service.create_case_from_prompt(payload.prompt, current_user)
-    nlp = get_nlp(request)
     # AI-chat flow is strict: never serve a template as an "AI draft".
-    background_tasks.add_task(_process_case_background, case.id, nlp, True)
+    job_id = await service.enqueue_processing(case.id, strict=True)
     return {
         "id": case.id,
         "title": case.title,
         "status": case.status,
         "created_at": case.created_at.isoformat(),
+        "job_id": job_id,
         "message": "Prompt received. AI is extracting details and generating your draft.",
     }
-
-
-async def _process_case_background(case_id: str, nlp_pipeline, strict: bool = False):
-    from app.db.postgres import AsyncSessionLocal
-    from app.db.redis_client import init_redis
-
-    await init_redis()  # Ensure Redis is initialized in background task
-    async with AsyncSessionLocal() as db:
-        try:
-            service = CaseService(db)
-            await service.process_case(case_id, nlp_pipeline, strict=strict)
-        except Exception as e:
-            # process_case already logged the traceback and marked the case as failed.
-            logger.error(
-                f"Background processing failed for case {case_id}: {type(e).__name__}: {e}"
-            )
 
 
 @router.get("/", response_model=List[CaseListItem])
@@ -132,7 +115,6 @@ async def regenerate_section(
     request: Request,
     case_id: str,
     payload: RegenerateRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -140,19 +122,20 @@ async def regenerate_section(
     nlp = get_nlp(request)
 
     if payload.section == "all":
-        # Regenerating all 7 sections takes minutes - longer than a proxy/browser keeps an HTTP
-        # request open. Queue it like a new case; the client polls GET /cases/{id} for the result.
+        # Regenerating all 7 sections takes minutes - queue it like a new case;
+        # the client polls GET /cases/{id} for the result.
         case = await service.get_case(case_id, current_user)
         if not case:
             raise HTTPException(status_code=404, detail="Case not found")
         case.status = "pending"
         await db.commit()
-        background_tasks.add_task(_process_case_background, case.id, nlp)
+        job_id = await service.enqueue_processing(case.id, strict=False)
         return JSONResponse(
             status_code=202,
             content={
                 "section": "all",
                 "status": "pending",
+                "job_id": job_id,
                 "message": "Draft regeneration queued.",
             },
         )
