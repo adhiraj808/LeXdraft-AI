@@ -42,6 +42,11 @@ Thumbs.db
 *.log
 logs/
 
+# Type checking / linting caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
 # Docker volumes (managed by Docker)
 postgres_data/
 redis_data/

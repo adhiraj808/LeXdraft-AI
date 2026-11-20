@@ -39,7 +39,7 @@ export default function CaseDetailPage() {
           <AlertCircle size={48} />
           <h2>Case not found</h2>
           <p>The requested draft could not be located in the archives.</p>
-          <Link to="/cases">
+          <Link to="/cases" className="btn btn-secondary">
             <ArrowLeft size={16} /> Back to cases
           </Link>
         </div>
@@ -52,9 +52,7 @@ export default function CaseDetailPage() {
   return (
     <Layout>
       <nav className="breadcrumb animate-fade-up">
-        <Link to="/cases">
-          Archives
-        </Link>
+        <Link to="/cases">Archives</Link>
         <span>/</span>
         <span className="breadcrumb-current">{caseData.title}</span>
       </nav>
@@ -67,9 +65,7 @@ export default function CaseDetailPage() {
               <CaseTypeBadge type={caseData.case_type} confidence={caseData.case_type_confidence} />
             )}
           </div>
-          <h1 className="detail-title">
-            {caseData.title}
-          </h1>
+          <h1 className="detail-title">{caseData.title}</h1>
           <div className="detail-date">
             <Clock size={14} />
             <span>Indexed on {new Date(caseData.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
@@ -79,10 +75,10 @@ export default function CaseDetailPage() {
         <div className="detail-actions">
           {caseData.draft && (
             <>
-              <button onClick={() => regenerate('all', '')} className="btn btn-outline">
+              <button onClick={() => regenerate('all', '')} className="btn btn-secondary">
                 <RefreshCw size={14} /> Regenerate Draft
               </button>
-              <button onClick={exportPdf} className="btn btn-accent">
+              <button onClick={exportPdf} className="btn btn-primary">
                 <Download size={14} /> Export PDF
               </button>
             </>
@@ -112,12 +108,11 @@ export default function CaseDetailPage() {
         </div>
       )}
 
-      <div className="detail-grid">
-        <div className="detail-col-left animate-fade-up stagger-2">
+      {/* Split pane: metadata left (30%), draft right (70%) */}
+      <div className="split-pane">
+        <div className="split-pane-left animate-fade-up stagger-2">
           <div className="detail-card">
-            <div className="detail-card-bg-icon">
-              <Info size={120} strokeWidth={1} />
-            </div>
+            <Info size={120} strokeWidth={1} className="detail-card-bg-icon" />
             <h2 className="detail-card-heading">
               <FileText size={12} /> Case Specifications
             </h2>
@@ -163,11 +158,11 @@ export default function CaseDetailPage() {
           )}
         </div>
 
-        <div className="detail-col-right animate-fade-up stagger-3">
+        <div className="split-pane-right animate-fade-up stagger-3">
           <div className="draft-section-title">
             <h2>AI Draft Output</h2>
             {caseData.draft && (
-              <div className="rag-badge">RAG ENHANCED</div>
+              <span className="rag-badge">RAG ENHANCED</span>
             )}
           </div>
 
