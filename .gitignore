@@ -51,11 +51,20 @@ logs/
 postgres_data/
 redis_data/
 
-# Local helper files (may contain real secrets/creds — NEVER commit)
+# Local helper files (may contain real secrets/creds - NEVER commit)
 run-all.ps1
 run-it.md
 export-data.ps1
 data-export/
+
+# Auth artifacts / temp credentials
+cookies*.txt
+login*.bat
+login*.ps1
+login*_payload.json
+*.pem
+*.key
+*.crt
 
 scratch/
 temp-*.json
