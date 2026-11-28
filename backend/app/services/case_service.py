@@ -179,7 +179,7 @@ class CaseService:
                 ", ".join(fact_sheet.statutes_cited_by_user) if fact_sheet.statutes_cited_by_user else None,
                 500
             ),
-            relief_sought=_clip(fact_sheet.relief_sought.value, MAX_RELIEF_CHARS),
+            relief_sought=_clip(", ".join(r.value for r in fact_sheet.relief_sought if r.provided()), MAX_RELIEF_CHARS),
         )
         case = await self.create_case(payload, user)
 

@@ -4,48 +4,47 @@ import { authAPI } from '../services/api'
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('user')) } catch { return null }
+  })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // On mount, check if user is authenticated via cookie
-    authAPI.me()
-      .then(r => setUser(r.data))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false))
+    const token = localStorage.getItem('access_token')
+    if (token) {
+      authAPI.me()
+        .then(r => setUser(r.data))
+        .catch(() => { localStorage.removeItem('access_token'); localStorage.removeItem('user') })
+        .finally(() => setLoading(false))
+    } else {
+      setLoading(false)
+    }
   }, [])
 
   const login = async (username, password) => {
     const { data } = await authAPI.login({ username, password })
-    // Tokens are set in httpOnly cookies by backend
+    localStorage.setItem('access_token', data.access_token)
+    localStorage.setItem('user', JSON.stringify(data.user))
     setUser(data.user)
     return data.user
   }
 
   const googleLogin = async (credential) => {
     const { data } = await authAPI.googleLogin(credential)
+    localStorage.setItem('access_token', data.access_token)
+    localStorage.setItem('user', JSON.stringify(data.user))
     setUser(data.user)
     return data.user
   }
 
   const register = async (payload) => {
     const { data } = await authAPI.register(payload)
-    // Auto-login after registration (backend sets cookies)
-    const { data: loginData } = await authAPI.login({
-      username: payload.username,
-      password: payload.password,
-    })
-    setUser(loginData.user)
     return data
   }
 
-  const logout = async () => {
-    try {
-      await authAPI.logout()
-    } catch (e) {
-      // Ignore logout errors, still clear user state
-      console.warn('Logout API error:', e)
-    }
+  const logout = () => {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('user')
     setUser(null)
   }
 

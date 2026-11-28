@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     REDIS_SSL: bool = False  # true = rediss:// (AWS ElastiCache in-transit encryption)
     REDIS_DB: int = 0
     REDIS_TTL_SECONDS: int = 86400  # 24 hours
-    REDIS_MAX_CONNECTIONS: int = 5
+    REDIS_MAX_CONNECTIONS: int = 20
     REDIS_CONNECT_TIMEOUT: float = 3.0
     REDIS_FALLBACK_MAX_KEYS: int = 500
 

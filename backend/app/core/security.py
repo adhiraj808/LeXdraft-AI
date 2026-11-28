@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.security.utils import get_authorization_scheme_param
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import select
@@ -18,7 +19,7 @@ from app.models.user import User
 from app.models.token_blacklist import TokenBlacklist
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 # bcrypt silently ignores everything after the 72nd byte (and newer releases raise).
 MAX_PASSWORD_BYTES = 72
@@ -107,7 +108,12 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Dependency: extracts and validates current user from JWT."""
+    """Dependency: extracts and validates current user from JWT (cookie or header)."""
+    # Try cookie first, then fall back to Authorization header
+    token = get_token_from_cookie_or_header(request) or token
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     payload = decode_token(token)
     user_id = payload.get("sub")
     token_type = payload.get("type")
@@ -164,12 +170,10 @@ def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(key="refresh_token", path="/api/v1/auth")
 
 
-def get_token_from_cookie_or_header(
-    request: Request,
-    access_token_cookie: Optional[str] = None,
-) -> Optional[str]:
+def get_token_from_cookie_or_header(request: Request) -> Optional[str]:
     """Extract token from cookie (preferred) or Authorization header."""
     # Try cookie first (httpOnly, not accessible via JS)
+    access_token_cookie = request.cookies.get("access_token")
     if access_token_cookie:
         return access_token_cookie
     # Fallback to Authorization header for API clients

@@ -98,7 +98,7 @@ export function Composer(props) {
                   <Icon name="ChevronDown" size={12} />
                 </button>
                 {modelOpen && (
-                  <div className="composer-model-pop animate-fade-down">
+                  <div className="composer-model-pop">
                     <ModelSelector
                       compact
                       onModelsChange={(v) => {

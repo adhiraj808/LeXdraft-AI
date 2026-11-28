@@ -6,14 +6,19 @@ import StatusBadge from '../components/StatusBadge'
 import CaseTypeBadge from '../components/CaseTypeBadge'
 import { Plus, ArrowRight, FolderOpen, CheckCircle, Clock, Sparkles } from 'lucide-react'
 
-function StatPill({ label, value, sub, delay, icon: Icon }) {
+function StatCard({ label, value, sub, delay, icon: Icon }) {
   return (
-    <div className="stat-pill animate-fade-up" style={{ animationDelay: `${delay}s` }}>
-      <div className="stat-pill-label">
-        <Icon size={14} /> {label}
+    <div className="stat-card animate-fade-up" style={{ animationDelay: `${delay}s` }}>
+      <div className="stat-card-icon-bg">
+        <Icon size={80} strokeWidth={1} />
       </div>
-      <div className="stat-pill-value">{value}</div>
-      {sub && <div className="stat-pill-sub">{sub}</div>}
+      <div className="stat-card-body">
+        <div className="stat-card-label">
+          <Icon size={12} /> {label}
+        </div>
+        <div className="stat-card-value">{value}</div>
+        {sub && <div className="stat-card-sub">{sub}</div>}
+      </div>
     </div>
   )
 }
@@ -40,14 +45,12 @@ export default function DashboardPage() {
         </p>
       </header>
 
-      {/* Stat bar - runs off left edge */}
-      <div className="stat-bar">
-        <StatPill label="Total Drafts" value={total} sub="Cumulative cases" delay={0.1} icon={FolderOpen} />
-        <StatPill label="Completed" value={completed} sub="Ready for export" delay={0.2} icon={CheckCircle} />
-        <StatPill label="In Progress" value={pending} sub="Queue / Processing" delay={0.3} icon={Clock} />
+      <div className="stat-grid">
+        <StatCard label="Total Drafts" value={total} sub="Cumulative cases" delay={0.1} icon={FolderOpen} />
+        <StatCard label="Completed" value={completed} sub="Ready for export" delay={0.2} icon={CheckCircle} />
+        <StatCard label="In Progress" value={pending} sub="Queue / Processing" delay={0.3} icon={Clock} />
       </div>
 
-      {/* CTA Banner - runs off right edge */}
       <section className="animate-fade-up stagger-4">
         <div className="cta-banner">
           <div className="cta-text">
@@ -56,13 +59,12 @@ export default function DashboardPage() {
               Generate a professional legal document based on case facts. Our system extracts entities and applies relevant legal precedents automatically.
             </p>
           </div>
-          <Link to="/cases/new" className="btn btn-primary">
+          <Link to="/cases/new" className="btn btn-accent">
             <Plus size={20} /> New Draft
           </Link>
         </div>
       </section>
 
-      {/* Activity feed */}
       <section className="animate-fade-up stagger-4">
         <div className="section-row">
           <h2 className="section-title">Recent Case Activity</h2>
@@ -72,26 +74,26 @@ export default function DashboardPage() {
         </div>
 
         {loading ? (
-          <div className="choreo-list">
+          <div className="skeleton-list">
             {[...Array(3)].map((_, i) => (
-              <div key={i} className="skeleton skeleton-card animate-shimmer" />
+              <div key={i} className="skeleton-row animate-shimmer" />
             ))}
           </div>
         ) : cases.length === 0 ? (
           <div className="empty-state">
             <FolderOpen size={40} className="empty-icon" />
             <h3 className="empty-title">Your archives are empty</h3>
-            <Link to="/cases/new" className="empty-action">Start your first draft today</Link>
+            <Link to="/cases/new" className="empty-link">Start your first draft today</Link>
           </div>
         ) : (
-          <div className="activity-feed choreo-list">
+          <div className="activity-list">
             {cases.slice(0, 5).map((c) => (
               <Link key={c.id} to={`/cases/${c.id}`}>
-                <div className="activity-item-row">
-                  <div className={`activity-dot ${c.status === 'completed' ? 'activity-dot-completed' :
-                    c.status === 'failed' ? 'activity-dot-failed' :
-                      'activity-dot-active'
-                  }`} />
+                <div className="activity-row">
+                  <div className={`activity-dot ${c.status === 'completed' ? 'activity-dot--completed' :
+                    c.status === 'failed' ? 'activity-dot--failed' :
+                      'activity-dot--active'
+                    }`} />
                   <div className="activity-info">
                     <h3 className="activity-title truncate">{c.title}</h3>
                     <time className="activity-date">
@@ -102,7 +104,7 @@ export default function DashboardPage() {
                     {c.case_type && <CaseTypeBadge type={c.case_type} />}
                     <StatusBadge status={c.status} />
                   </div>
-                  <ArrowRight size={16} className="activity-chevron" />
+                  <ArrowRight size={16} className="empty-icon" style={{ margin: 0 }} />
                 </div>
               </Link>
             ))}

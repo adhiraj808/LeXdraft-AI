@@ -301,3 +301,16 @@ class NLPPipeline:
         if added:
             logger.info(f"Added document {doc_id} to RAG knowledge base.")
         return added
+
+
+# Global pipeline instance for worker access
+_nlp_pipeline_instance: NLPPipeline | None = None
+
+
+async def get_nlp() -> NLPPipeline:
+    """Get or create the global NLP pipeline instance."""
+    global _nlp_pipeline_instance
+    if _nlp_pipeline_instance is None:
+        _nlp_pipeline_instance = NLPPipeline()
+        await _nlp_pipeline_instance.load()
+    return _nlp_pipeline_instance

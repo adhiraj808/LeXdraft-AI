@@ -5,17 +5,25 @@ const BASE_URL = import.meta.env.VITE_API_URL || ''
 const api = axios.create({
   baseURL: `${BASE_URL}/api/v1`,
   headers: { 'Content-Type': 'application/json' },
-  withCredentials: true, // Send httpOnly cookies with requests
+})
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
 })
 
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     const url = err.config?.url || ''
-    const isAuthCall = /\/auth\/(login|register|google|refresh)/.test(url)
+    const isAuthCall = /\/auth\/(login|register|google)/.test(url)
+    // A failed *login* must not bounce the user to /login: that hard reload
+    // wipes out the error toast before LoginPage can show it.
     const onAuthPage = ['/login', '/register'].includes(window.location.pathname)
-    // Only redirect on 401 for non-auth endpoints when not on auth pages
     if (err.response?.status === 401 && !isAuthCall && !onAuthPage) {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('user')
       window.location.href = '/login'
     }
     return Promise.reject(err)
@@ -45,8 +53,6 @@ export const authAPI = {
   register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
   googleLogin: (credential) => api.post('/auth/google', { credential }),
-  logout: () => api.post('/auth/logout'),
-  refresh: () => api.post('/auth/refresh'),
   me: () => api.get('/auth/me'),
 }
 

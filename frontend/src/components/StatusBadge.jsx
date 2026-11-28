@@ -8,8 +8,8 @@ const CFG = {
 export default function StatusBadge({ status }) {
   const c = CFG[status] || CFG.pending
   return (
-    <span className={`badge badge-${c.variant}`}>
-      <span className={`badge-dot ${c.pulse ? 'animate-pulse' : ''}`} />
+    <span className={`status-badge status-badge--${c.variant}`}>
+      <span className={`status-dot ${c.pulse ? 'animate-pulse' : ''}`} />
       {c.label}
     </span>
   )
