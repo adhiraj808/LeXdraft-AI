@@ -46,10 +46,6 @@ export default defineConfig({
               test: /src\/pages\/(CaseListPage|CaseDetailPage|NewCasePage)/,
             },
             {
-              name: 'page-legal-assistant',
-              test: /src\/pages\/LegalAssistantPage/,
-            },
-            {
               name: 'page-admin',
               test: /src\/pages\/AdminPage/,
             },

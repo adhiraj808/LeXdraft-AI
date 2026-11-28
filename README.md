@@ -8,7 +8,6 @@ An intelligent full-stack platform that accepts unstructured case facts, classif
 - **Named Entity Recognition (NER)**: spaCy extracts persons, organisations, dates, statutes, courts and money amounts.
 - **Dynamic Draft Generation**: OpenAI-compatible LLM providers (Groq, Hugging Face, any `/chat/completions` endpoint) or hardcoded case-type-aware templates. No LLM key = templates, no failure.
 - **RAG precedent retrieval** (optional): ChromaDB + all-MiniLM-L6-v2 embeddings, loaded lazily on first use.
-- **Legal Q&A (Legal Assistant)**: plain-language answers in English/Hindi with template fallbacks.
 - **PDF Export**: ReportLab generates professional PDFs.
 - **Modern Dashboard & AI Chat**: React app with chat-based drafting, case list/detail, admin panel.
 
@@ -31,7 +30,7 @@ An intelligent full-stack platform that accepts unstructured case facts, classif
 legal_draft_system/
 ├── backend/                  # FastAPI backend + ML/NLP
 │   ├── app/
-│   │   ├── api/routes/       # health, auth, cases, rag, admin, fir_analysis (Q&A)
+│   │   ├── api/routes/       # health, auth, cases, rag, admin
 │   │   ├── core/             # config, security, middleware, rate_limit, logging
 │   │   ├── db/               # postgres (SQLAlchemy) + redis_client
 │   │   ├── models/           # SQLAlchemy ORM models

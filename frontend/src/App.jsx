@@ -11,7 +11,6 @@ import NewChatPage from './pages/NewChatPage'
 import CaseListPage from './pages/CaseListPage'
 import CaseDetailPage from './pages/CaseDetailPage'
 import AdminPage from './pages/AdminPage'
-import LegalAssistantPage from './pages/LegalAssistantPage'
 
 export default function App() {
   return (
@@ -28,7 +27,6 @@ export default function App() {
           <Route path="/cases/aichat" element={<ProtectedRoute><NewChatPage /></ProtectedRoute>} />
           <Route path="/cases/:id" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
           <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
-          <Route path="/legal-assistant" element={<ProtectedRoute><LegalAssistantPage /></ProtectedRoute>} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

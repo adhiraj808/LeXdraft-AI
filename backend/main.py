@@ -13,7 +13,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api.routes import admin, auth, cases, fir_analysis, health, rag
+from app.api.routes import admin, auth, cases, health, rag
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.middleware import (
@@ -129,7 +129,6 @@ def create_app() -> FastAPI:
     app.include_router(cases.router, prefix="/api/v1/cases", tags=["cases"])
     app.include_router(rag.router, prefix="/api/v1/rag", tags=["rag"])
     app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
-    app.include_router(fir_analysis.router, prefix="/api/v1", tags=["fir-analysis"])
 
     return app
 

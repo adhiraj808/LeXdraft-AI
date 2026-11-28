@@ -4503,26 +4503,7 @@ html.dark .model-swap-btn:hover {
     }
 }
 
-/* Legal Assistant Page - Model Selector Integration */
-.assistant-header .model-selector-dual {
-    margin-right: 1rem;
-}
 
-@media (max-width: 900px) {
-    .assistant-header {
-        flex-wrap: wrap;
-        gap: 1rem;
-    }
-    .assistant-header .model-selector-dual {
-        order: 3;
-        width: 100%;
-        margin-right: 0;
-    }
-    .header-right {
-        flex-wrap: wrap;
-        gap: 0.5rem;
-    }
-}
 /* ---------------------------------------------------------------------- */
 /* Admin Panel - AI Config Panel                                          */
 /* ---------------------------------------------------------------------- */

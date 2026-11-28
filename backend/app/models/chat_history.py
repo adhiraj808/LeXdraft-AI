@@ -1,4 +1,4 @@
-"""Chat history ORM model for tracking legal assistant conversations."""
+"""Chat history ORM model for tracking chat conversations."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from app.db.postgres import Base
 
 
 class ChatSource(PyEnum):
-    LEGAL_ASSISTANT = "legal_assistant"
     AI_CHAT = "ai_chat"
     CASE_CHAT = "case_chat"
 
@@ -24,14 +23,14 @@ class ChatHistory(Base):
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     case_id: Mapped[str] = mapped_column(String, ForeignKey("cases.id", ondelete="SET NULL"), index=True, nullable=True)
     
-    source: Mapped[ChatSource] = mapped_column(Enum(ChatSource), default=ChatSource.LEGAL_ASSISTANT)
+    source: Mapped[ChatSource] = mapped_column(Enum(ChatSource), default=ChatSource.AI_CHAT)
     
     # Conversation data
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     
     # Metadata
-    category: Mapped[str] = mapped_column(String(100), nullable=True)  # legal category
+    category: Mapped[str] = mapped_column(String(100), nullable=True)
     language: Mapped[str] = mapped_column(String(10), default="english")
     model_used: Mapped[str] = mapped_column(String(100), nullable=True)
     fallback_used: Mapped[bool] = mapped_column(default=False)

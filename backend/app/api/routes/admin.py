@@ -136,8 +136,8 @@ LLM_ENABLED = True
 CURRENT_MODEL = getattr(settings, "MODEL_PROVIDER", "groq") or "groq"
 
 AVAILABLE_MODELS = [
-    {"id": "groq", "label": "API Model", "provider": "api"},
-    {"id": "hf", "label": "API Model", "provider": "api"},
+    {"id": "groq", "label": "Groq", "provider": "api"},
+    {"id": "hf", "label": "Hugging Face", "provider": "api"},
     {"id": "local", "label": "Local Model", "provider": "local"},
     {"id": "template", "label": "Template", "provider": "template"},
 ]
