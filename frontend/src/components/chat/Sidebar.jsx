@@ -6,7 +6,6 @@ import { Icon } from './Icons'
 const navItems = [
   { icon: 'Folder', label: 'My Cases', href: '/cases' },
   { icon: 'New', label: 'New Case (Form)', href: '/cases/new' },
-  { icon: 'HelpCircle', label: 'Legal Assistant', href: '/legal-assistant' },
 ]
 
 export function Sidebar({ isOpen, onClose, onNavigate, recents, onNewChat, onSelectRecent }) {
