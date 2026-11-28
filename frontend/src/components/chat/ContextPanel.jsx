@@ -5,14 +5,13 @@ export function ContextPanel(props) {
   const onClose = props.onClose
   const info = props.info || {}
   const extracted = info.extracted || []
-  const sources = info.sources || []
   const activity = info.activity || []
 
   return (
     <aside className={'context-panel' + (isOpen ? ' open' : '')}>
       <div className="context-header">
-        <span>SOURCES & CONTEXT</span>
-        <button onClick={onClose} aria-label="Close source panel" type="button">×</button>
+        <span>CONTEXT</span>
+        <button onClick={onClose} aria-label="Close context panel" type="button">×</button>
       </div>
 
       <div className="context-content">
@@ -53,25 +52,6 @@ export function ContextPanel(props) {
               ))
             )}
           </div>
-        </section>
-
-        <section className="source-section">
-          <div className="context-title">
-            <span className="context-label">REFERENCED SOURCES</span>
-            <span className="source-count">{sources.length}</span>
-          </div>
-          {sources.map((source, i) => (
-            <button className="source-card" key={source.name + '-' + i} type="button">
-              <span className={'source-icon ' + (source.tone || 'law')}>
-                <Icon name={source.tone === 'policy' ? 'Document' : 'Library'} size={17} />
-              </span>
-              <span>
-                <strong>{source.name}</strong>
-                <small>{source.meta}</small>
-              </span>
-              <Icon name="ChevronRight" size={14} />
-            </button>
-          ))}
         </section>
 
         <section className="activity-section">
