@@ -181,10 +181,13 @@ async def export_pdf(
 
     is_pdf = content[:4] == b"%PDF"
     media_type = "application/pdf" if is_pdf else "text/html"
+    # Sanitize case title for filename (remove special chars, limit length)
+    safe_title = "".join(c for c in case.title if c.isalnum() or c in (" ", "-", "_")).strip()
+    safe_title = safe_title.replace(" ", "_")[:50] or "draft"
     filename = (
-        f"legal_draft_{case.id[:8]}.pdf"
+        f"legal_draft_{safe_title}.pdf"
         if is_pdf
-        else f"legal_draft_{case.id[:8]}.html"
+        else f"legal_draft_{safe_title}.html"
     )
 
     return Response(

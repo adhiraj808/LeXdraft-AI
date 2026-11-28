@@ -1,5 +1,6 @@
 """Template-based draft generation (fallback when no LLM available)."""
 
+from datetime import datetime
 from typing import Dict, Optional
 
 from app.nlp.generator.config import (
@@ -7,6 +8,20 @@ from app.nlp.generator.config import (
     CASE_TYPE_CONFIG,
     DEFAULT_CASE_TYPE,
 )
+
+
+def _extract_year(date_str: Optional[str]) -> str:
+    """Extract year from date string. Returns current year if parseable date, else 'TO BE PROVIDED'."""
+    if not date_str:
+        return "TO BE PROVIDED"
+    # Try common formats: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, "15 March 2023", etc.
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).strftime("%Y")
+        except ValueError:
+            continue
+    # If no format matches, return current year as fallback
+    return str(datetime.now().year)
 
 
 def _clip(value: Optional[str], limit: int) -> Optional[str]:
@@ -142,7 +157,8 @@ class TemplateGenerator:
         fs = context.get("fact_sheet")
 
         if section == "title_block":
-            return f"{self._court_header(context.get('jurisdiction', 'District Court'), context.get('jurisdiction', 'City'), cfg, '2025')}\n\n{cfg['doc_title'].format(stat=stat or 'APPLICABLE LAW', amt=amt or 'CLAIMED AMOUNT')}\n\n{self._parties_block(cfg, p, r)}"
+            yr = _extract_year(inc)
+            return f"{self._court_header(context.get('jurisdiction', 'District Court'), context.get('jurisdiction', 'City'), cfg, yr)}\n\n{cfg['doc_title'].format(stat=stat or 'APPLICABLE LAW', amt=amt or 'CLAIMED AMOUNT')}\n\n{self._parties_block(cfg, p, r)}"
         elif section == "complaint_body":
             return self._narrative_paragraphs(case_type, p, r, context.get("case_description", ""), inc, amt, stat, rn, fs)
         elif section == "prayer":
